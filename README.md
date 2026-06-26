@@ -19,6 +19,10 @@ optional **Artificial Bee Colony (ABC) / evolutionary** search over the (identit
 
 ## What it is
 
+![XenoDesign1 design loop](docs/figures/design_loop.png)
+
+*XenoDesign1 design loop: seed -> (restraints) -> Chai-1 predict -> score -> select, iterated, branching per binder class with class-specific gates (chirality veto, coiled-coil periodicity, MetalHawk metal-geometry, ABC/EA mixed-chirality search).*
+
 Three things make XenoDesign1 different from a homochiral binder designer:
 
 1. **Mixed chirality is first-class.** Chai (like ESM/LigandMPNN) is L-biased, so the loop is
@@ -179,6 +183,54 @@ python scripts/design.py --binder_class non_alpha --target_type protein \
   with structured chirality moves, a fast low-diffusion-step fitness, and A/B variants.
 - **Adversarial judge panel** (`judges/`) — hard chirality veto + weighted composite (binding /
   ESM-2 PLL / mirror) for final selection.
+
+---
+
+## Test cases / results
+
+De-novo validation: 4/4 binder classes produced viable Chai-1 models from scratch (no native-sequence seeding).
+
+> ⚠️ In-silico only — these are Chai-1 predictions and search outputs, not experimental measurements. Metrics are reported verbatim, including the cases where the deposited geometry diverges from the design restraints (see the metal note below) and the ABC run for which no 3D model was deposited.
+
+### α-helical binder (de novo, all-D)
+
+![De-novo all-D alpha-helical binder](docs/figures/fig_alpha.png)
+
+*De-novo all-D alpha-helical binder (chain B; 20 D-residues + C-terminal Gly, teal sidechains) against an L-protein target (chain A, faded). Chai-1 ipTM 0.791; chirality gate 0.000 (vs 0.44 baseline).*
+
+**Headline:** Chai-1 ipTM **0.791**; chirality-gate violation driven to **0.000** (baseline 0.44).
+
+### Non-α (cystine-knot / ICK-class) binder
+
+![De-novo non-alpha cystine-knot binder](docs/figures/fig_non_alpha.png)
+
+*De-novo non-alpha (cystine-knot / ICK-class) all-D binder (chain C, 30 aa, length-stable across all 12 design iterations) docked on a two-chain target (chains A/B, faded). Exercises the non-alpha branch + chirality gate.*
+
+**Headline:** length-**stable across all 12 iterations** — exercises the non-α branch and chirality gate end-to-end (not an affinity claim).
+
+### Cyclic Zn-metallopeptide (6UFA-inspired)
+
+![Cyclic Zn-metallopeptide, 6UFA-inspired](docs/figures/fig_cyclic_metal.png)
+
+*Cyclic Zn-metallopeptide (chain B; 24-mer all-D), 6UFA-inspired. Chai-1 pTM 0.927; MetalHawk geometry class = tetrahedral (perplexity 1.25, PASS). The relaxed model realizes a 2-His Zn site (His19/His23, Zn-N ~2.1-2.3 A); design restraints had pinned a 4-His L/D/L/D set (His 6/12/18/24) that the sequence drifted off of -- see open issue.*
+
+**Headline:** Chai-1 pTM **0.927**; **passed** the MetalHawk tetrahedral-geometry gate (perplexity **1.25**). Honest structural note: the deposited model realizes a **2-His** Zn site (His19/His23, Zn-N ~2.1–2.3 Å), **not** the 4-His L/D/L/D tetrahedron the restraints pinned — the sequence drifted off the restrained coordinator set (tracked as an open issue).
+
+### Free mixed-chirality macrocycle (no target)
+
+![Free mixed-chirality macrocycle](docs/figures/fig_cyclic_free.png)
+
+*Free mixed-chirality macrocycle (single chain, 16-mer; D-residues teal, Gly elsewhere). No target — intramolecular design objective. Chai-1 pTM 0.656.*
+
+**Headline:** Chai-1 pTM **0.656** on a no-target, intramolecular objective.
+
+### ABC / EA mixed-chirality search
+
+![ABC/EA mixed-chirality search](docs/figures/fig_abc.png)
+
+*ABC/EA mixed-chirality search (Variant B, 12-mer MGVRIFQQFGAP, chirality LLDDDDDDLDDD). Fitness 0.718 -> 0.841 over 87 evaluations; 20-mer scaled variant 0.806. EA convergence + sequence/chirality map (no 3D model was deposited for this run).*
+
+**Headline:** fitness **0.718 → 0.841** over 87 evaluations (20-mer scaled variant 0.806). This is a **sequence/search result only** — no 3D structure was deposited for this run.
 
 ---
 
