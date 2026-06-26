@@ -1,0 +1,46 @@
+{
+  "out_dir": "abc_runs/pilot_a",
+  "variant": "a",
+  "selected_nectar_engine": 0.7232227623462677,
+  "selected_d_fasta": "MQALEHQQQIGH",
+  "selected_chirality_pattern": {
+    "0": "L",
+    "1": "D",
+    "2": "L",
+    "3": "D",
+    "4": "L",
+    "5": "D",
+    "6": "L",
+    "7": "D",
+    "8": "L",
+    "9": "D",
+    "10": "L",
+    "11": "D"
+  },
+  "n_evals_on_disk": 2,
+  "best_reconstructed": {
+    "nectar": 0.7232227623462677,
+    "eval": 1,
+    "ptm": 0.6046039462089539,
+    "cn": 1.0165864449224173,
+    "prox": 1.0,
+    "fasta": "M(DGN)A(DLE)E(DHI)Q(DGN)Q(DIL)G(DHI)",
+    "dir": "abc_runs/pilot_a/abc_evals/abc_eval_00001"
+  },
+  "curve": [
+    {
+      "eval": 1,
+      "ptm": 0.6046039462089539,
+      "cn": 1.0165864449224173,
+      "nectar": 0.7232227623462677,
+      "running_best": 0.7232227623462677
+    },
+    {
+      "eval": 2,
+      "ptm": 0.07791834324598312,
+      "cn": 38.04411661479341,
+      "nectar": 0.05520302409644346,
+      "running_best": 0.7232227623462677
+    }
+  ]
+}

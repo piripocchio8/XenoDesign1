@@ -1,0 +1,54 @@
+{
+  "case_id": "cyclic",
+  "search": "abc",
+  "abc_variant": "b",
+  "fitness_steps": 15,
+  "selected_nectar": 0.8060992088768568,
+  "selected_d_fasta": "PVGEEHKNVIKVMPGSGNGI",
+  "selected_chirality_pattern": {
+    "0": "L",
+    "1": "L",
+    "2": "L",
+    "3": "L",
+    "4": "L",
+    "5": "L",
+    "6": "D",
+    "7": "D",
+    "8": "D",
+    "9": "D",
+    "10": "D",
+    "11": "D",
+    "12": "D",
+    "13": "D",
+    "14": "D",
+    "15": "D",
+    "16": "D",
+    "17": "D",
+    "18": "D",
+    "19": "D"
+  },
+  "n_cycles": 4,
+  "history": [
+    {
+      "cycle": 0,
+      "best_nectar": 0.6663831190750366,
+      "evals_used": 48
+    },
+    {
+      "cycle": 1,
+      "best_nectar": 0.8060992088768568,
+      "evals_used": 80
+    },
+    {
+      "cycle": 2,
+      "best_nectar": 0.8060992088768568,
+      "evals_used": 113
+    },
+    {
+      "cycle": 3,
+      "best_nectar": 0.8060992088768568,
+      "evals_used": 146
+    }
+  ],
+  "out_dir": "XenoDesign1_local_ref/abc_B_20"
+}

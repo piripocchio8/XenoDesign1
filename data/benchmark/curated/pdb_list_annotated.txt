@@ -1,0 +1,92 @@
+1MBN
+256B
+1BSY
+1QJP
+1DR1
+2TRX
+1TIM
+1TEN
+1ZAA
+1CFD
+1IQZ
+1HGU
+1A3N
+1LMB
+1CNV
+1BPI
+1AKE
+1UBQ
+6NW1
+7O91
+5FC9
+1LLM
+2Q4S
+4ozs
+4u3h
+2f21
+2p6j
+2wxc
+1prb
+2a3d
+5af5
+1lmb4
+1p6p
+5awl
+2jof
+7ald
+1fjk
+1cad
+3ncm
+1acf
+6ufx
+4ee9
+2of3
+5c1e
+1bqc
+1que
+1mhx
+6e6n
+1vii
+1ihv
+4etx
+4pmy
+2hvm
+6ied
+1k81
+1fme
+
+L/D mixed # mostly coming from here https://doi.org/10.1002/pro.3974 and https://doi.org/10.1016/j.cell.2022.07.019. I realized that the fasta is wrong for all of them. Not considering the D-residues. In most of the cases, the structure can be made only by applying the crystal symmetry, so I do not think chai has been trained on the correct structure (or only the L part of it
+6UCX
+6UD9
+6UDR
+6UDW
+6UDZ
+6UF4
+6UF7
+6UF8
+6UF9
+6UFA # zinc cofactor
+6UFU
+6UG2
+6UG3
+6UG6 # Na cofactor
+6UGB # Na cofactor, this one does not contain Daa, it would be nice to check the all D-aa version of it
+6UGC # Na cofactor, this one does not contain Daa, it would be nice to check the all D-aa version of it
+
+7UBC #N-methyl ala
+7UBD
+7UBE
+7UBF
+7UBG
+7UBH
+7UBI
+7UCP
+7UZL
+8CTO #always cyclic, here we have also N-methylated Leucine
+8CUN
+8CWA
+
+>protein|R-Peptide by Nanda
+R(DCY)W(DAR)C(DAR)R(DCY)R(DAR)C(DAR) # https://pubs.acs.org/doi/full/10.1021/jacs.8b07553 ALWAYS CYCLIC not in the training set, Fe4S4 can be added as cofactor, small caps are D-aa
+
+

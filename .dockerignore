@@ -1,0 +1,14 @@
+# Keep the build context (and the Apptainer %files copy) lean and reproducible.
+# The repo itself is small; these are the dirs that bloat it or are host/run state.
+.git
+.claude
+**/__pycache__
+**/*.pyc
+runs/
+logs/
+abc_runs/
+*.sif
+# Local-only, gitignored host state that must never bake into a shared image.
+RUNBOOK.local.md
+file_manifest.local.json
+*.local.md

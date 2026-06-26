@@ -1,0 +1,87 @@
+# XenoDesign1 — Singularity / Apptainer definition (clean, self-contained).
+#
+# Same recipe as the repo-root Dockerfile: stock chai_lab==0.6.1 + this repo.
+# Our Chai-1 changes are RUNTIME MONKEYPATCHES (xenodesign/chai_patches.py via
+# ensure_patches()), NOT a fork — there is no patched-chai image to publish.
+#
+# Two ways to build (BOTH work unprivileged on a generic HPC login node — no root):
+#   1) From the CUDA base below, self-contained (no Docker daemon needed). On HPC,
+#      --fakeroot is implied for an unprivileged user, but pass it explicitly:
+#        apptainer build --fakeroot xenodesign.sif docker/xenodesign.def
+#      (Singularity: `singularity build --fakeroot ...` — same flags.)
+#   2) Convert an already-built local Docker image (skips the %post pip installs;
+#      handy where you build the Docker image on a workstation, then ship the SIF):
+#        docker build -t xenodesign:test .
+#        apptainer build --fakeroot xenodesign.sif docker-daemon://xenodesign:test
+#      (option 2 does not use this file; it is here for the from-scratch build.)
+#
+# torch 2.3.1+cu121 ships PTX/SASS for sm_70..sm_90, so this image runs on V100
+# (sm_70, e.g. UNINA IBiSCo 4x V100 32GB), A100, RTX A4500/4090, etc. — no rebuild.
+Bootstrap: docker
+From: nvidia/cuda:12.1.1-runtime-ubuntu22.04
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+    # build-essential + python3.11-dev: freesasa has no cp311 manylinux wheel, so
+    # pip compiles its C extension from sdist — needs gcc + Python headers.
+    apt-get update && apt-get install -y --no-install-recommends \
+        python3.11 python3.11-venv python3.11-dev python3-pip git build-essential
+    rm -rf /var/lib/apt/lists/*
+    ln -sf /usr/bin/python3.11 /usr/local/bin/python
+    ln -sf /usr/bin/python3.11 /usr/local/bin/python3
+
+    # Explicit deps ONLY. torch 2.3.1+cu121, gemmi, einops, numpy, rdkit,
+    # biopython, pandas, matplotlib, numba ... all come transitively from
+    # chai_lab==0.6.1. transformers (PepMLM seeding) and freesasa (BSA scoring)
+    # are NOT chai deps, so they are named explicitly.
+    python -m pip install --no-cache-dir --upgrade pip
+    python -m pip install --no-cache-dir \
+        "chai_lab==0.6.1" \
+        "transformers>=4.40,<5" \
+        freesasa \
+        gemmi \
+        pytest
+
+    # Copy the repo into the image (see %files).
+    mkdir -p /chai_downloads /hf_cache
+
+%files
+    . /work
+
+%environment
+    export PYTHONUNBUFFERED=1
+    export PYTHONDONTWRITEBYTECODE=1
+    export PYTHONPATH=/work
+    # All chai weights (ESM-2 traced ~5.7 GB, conformers, model weights) cache here;
+    # bind-mount a host dir over it so they download once. HF cache for PepMLM.
+    export CHAI_DOWNLOADS_DIR=/chai_downloads
+    export HF_HOME=/hf_cache
+
+%runscript
+    # Default entry: the unified multi-class design CLI. ensure_patches() applies
+    # the chai monkeypatches inside run_design automatically.
+    cd /work
+    exec python scripts/design.py "$@"
+
+%help
+    XenoDesign1 D-peptide design (HalluDesign-on-Chai-1).
+
+    GPU runs need --nv (NVIDIA libs into the container). The SIF is READ-ONLY, so
+    --out_dir MUST point at a bind-mounted host path, not a path inside the image.
+    Bind the chai weights cache (ESM-2 ~5.7 GB + conformers + model weights) and the
+    HF cache once so they are not re-downloaded per job.
+
+    Smoke design on 1 GPU (generic HPC; $SCRATCH is your writable scratch dir):
+      apptainer run --nv \
+        -B $SCRATCH/chai_cache:/chai_downloads \
+        -B $SCRATCH/hf_cache:/hf_cache \
+        -B $SCRATCH/runs:/runs \
+        xenodesign.sif --binder_class alpha --target_type protein --smoke \
+        --device cuda:0 --out_dir /runs/smoke_alpha
+
+    CPU tests (no GPU, no weights):
+      apptainer exec xenodesign.sif \
+        python -m pytest -m "not gpu and not network" -q
+
+    SLURM: request 1 GPU per task; see docker/README.md for an sbatch example and the
+    multi-GPU run_parallel.py worker-pool pattern (one task / 1 GPU per worker).

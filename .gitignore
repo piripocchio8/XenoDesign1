@@ -1,0 +1,60 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.eggs/
+build/
+dist/
+
+# Env
+.venv/
+venv/
+
+# Local-only run logs / machine-specific notes (keep sensitive info out of the repo)
+local/
+*.local
+*.local.md
+RUNBOOK.local.md
+docs/IBISCO-delivery.md
+
+# GPU run artifacts (large CIFs / npz; reproduce via the driver, don't commit)
+runs/
+.cyc_calib/
+.calib_out/
+.claude/worktrees/
+
+# Private collaborator reports (not for public repo)
+docs/reports/
+
+# Internal session / planning artifacts — kept local, excluded from the public repo.
+# (Public docs: README, docs/ARCHITECTURE.md, docs/whitepaper/, docker/README.md,
+#  data/benchmark/README.md, docs/pre-merge-readiness-audit.md, GPU_TESTS.md, and the
+#  2026-06-25 results docs that back the white paper.)
+TASK.md
+CLAUDE.md
+docs/decisions.md
+docs/superpowers/
+docs/research/
+# All results notes except the 2026-06-25 white-paper backing set
+docs/results/
+!docs/results/2026-06-25-abc-pilot.md
+!docs/results/2026-06-25-cyclization-calibration.md
+!docs/results/2026-06-25-denovo-per-class.md
+# Handoff / overnight-session snapshots
+*handoff*
+*HANDOFF*
+docs/HANDOFF-local-gpu-session.md
+# Research / working notes
+docs/benchmark-prior-art-map.md
+docs/benchmark-shortlist.md
+docs/boltzdesign-halludesign-feature-map.md
+docs/de-alpha-centrify-part-b-deferred.md
+docs/experiments-index.md
+docs/tuning-playbook.md
+docs/IBISCO-delivery.md
+docs/7YH8_relaxed_dE_int_register.md
+docs/chai1-mechanism-and-xenodesign-plan.md
+
+# Claude Code internal config + session handoffs (not part of the public tool)
+.claude/

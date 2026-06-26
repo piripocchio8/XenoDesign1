@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xenodesign"
+version = "0.0.1"
+description = "HalluDesign-on-Chai for D-peptide / heterochiral binder design"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24"]
+
+[project.optional-dependencies]
+seed = ["transformers>=4.40", "torch>=2.1"]
+dev = ["pytest>=7.4"]
+
+[tool.setuptools.packages.find]
+include = ["xenodesign*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v"
+markers = [
+    "gpu: requires a GPU and the chai_lab package (deselect with -m 'not gpu')",
+    "network: downloads a model/dataset (deselect with -m 'not network')",
+]
