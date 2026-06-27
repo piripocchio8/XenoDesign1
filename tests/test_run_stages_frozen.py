@@ -22,3 +22,13 @@ def test_frozen_from_coord_residues_handles_short_and_empty():
     # 2-tuple back-compat (pos, one_letter) — chirality unknown -> None.
     assert frozen_from_coord_residues([(3, "C")]) == {
         FrozenPosition(position0=2, identity="C", chirality=None)}
+
+
+from xenodesign.seq_stage import SequenceUpdate
+
+
+def test_build_known_seq_pins_coordinator_identity():
+    coord = [(2, "H", "HIS", "L", "ND1")]            # His at 1-based pos 2 (0-based 1)
+    stage = SequenceUpdate(frozen=frozen_from_coord_residues(coord))
+    # The real evolving seq has 'A' at the coordinator slot; the frozen identity stamps 'H' over it.
+    assert stage.build_known_seq(prev_l_seq="AAAAA") == "AHAAA"
