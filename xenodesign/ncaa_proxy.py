@@ -32,5 +32,16 @@ CONFORMATIONAL_PROXY = {
 
 
 def proxy_for(ncaa_code: str) -> Optional[str]:
-    """Canonical three-letter proxy for an ncAA code, or None if unknown (-> fixed context)."""
-    return CONFORMATIONAL_PROXY.get(ncaa_code.upper())
+    """Canonical three-letter proxy for an ncAA code, or None if unknown (-> fixed context).
+
+    Curated CONFORMATIONAL_PROXY first (hand-grounded Ramachandran proxies); when the code is
+    not curated, fall back to the MONDE-T catalog's canonical ``parent`` so the larger
+    --ncaa_dict palettes still resolve to a parent chemistry for MPNN conditioning.
+    """
+    code = ncaa_code.upper()
+    hit = CONFORMATIONAL_PROXY.get(code)
+    if hit is not None:
+        return hit
+    # Lazy import: keep ncaa_proxy import-light and avoid a cycle (mondet imports io_spec only).
+    from xenodesign import mondet
+    return mondet.mondet_parent(code)

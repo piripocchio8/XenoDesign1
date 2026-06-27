@@ -72,9 +72,12 @@ def test_abc_variant_b_selected(monkeypatch):
                                         "abc.cycles": 1, "use_pepmlm": False,
                                         "use_pll": False, "restraints_on": False})
     dispatch.run_design(cfg)
-    # Variant B returns a 3-char identity string (point-mutated), never a (DXX) block emit.
-    assert isinstance(seen["out"], str) and len(seen["out"]) == 3
-    assert "(" not in seen["out"]
+    # Variant B returns a 3-RESIDUE identity (point-mutated). With the default --ncaa_dict
+    # d_only palette now ON, a residue may be emitted as a (DXX) block, so count residues
+    # (identity_tokens), not raw chars.
+    from xenodesign.abc.moves import identity_tokens
+    assert isinstance(seen["out"], str)
+    assert len(identity_tokens(seen["out"])) == 3
 
 
 def test_abc_passes_frozen_coordinators(monkeypatch):
@@ -188,7 +191,10 @@ def test_mixed_chirality_B_routes_to_abc_variant_b(monkeypatch):
                                         "restraints_on": False})
     result = dispatch.run_design(cfg)
     assert result["abc_variant"] == "b"
-    assert isinstance(seen["out"], str) and len(seen["out"]) == 3
+    # 3 RESIDUES (the default d_only ncAA palette may emit a (DXX) block per residue).
+    from xenodesign.abc.moves import identity_tokens
+    assert isinstance(seen["out"], str)
+    assert len(identity_tokens(seen["out"])) == 3
 
 
 def test_mixed_chirality_flag_supersedes_cfg_abc_variant(monkeypatch):

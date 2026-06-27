@@ -40,6 +40,14 @@ def _parse_args(argv=None):
     p.add_argument("--abc_variant", choices=("a", "b"), default=None,
                    help="ABC axis split: 'a' = search chirality + MPNN identity (default); "
                         "'b' = search identity+chirality, MPNN warm-start only")
+    p.add_argument("--ncaa_dict", choices=("d_only", "d_common", "all"), default=None,
+                   help="ncAA palette SCOPE for the Variant-B mixed-chirality search "
+                        "(MONDE-T catalog): d_only = canonical D set only (default); "
+                        "d_common = D set + top-N MONDE-T ncAA by frequency; "
+                        "all = D set + ALL MONDE-T ncAA (no cap)")
+    p.add_argument("--ncaa_top_x", type=int, default=None,
+                   help="top-X MONDE-T ncAA (by entity_count) added for --ncaa_dict d_common "
+                        "(default 20)")
     p.add_argument("--abc_cycles", type=int, default=None, help="ABC employed/onlooker/scout cycles")
     p.add_argument("--colony_size", type=int, default=None, help="ABC colony size (food sources)")
     p.add_argument("--scout_limit", type=int, default=None,
@@ -89,6 +97,10 @@ def _overrides(a) -> dict:
         o["mixed_chirality"] = a.mixed_chirality
     if a.abc_variant is not None:
         o["abc.variant"] = a.abc_variant
+    if a.ncaa_dict is not None:
+        o["ncaa_dict"] = a.ncaa_dict
+    if a.ncaa_top_x is not None:
+        o["ncaa_top_x"] = a.ncaa_top_x
     if a.abc_cycles is not None:
         o["abc.cycles"] = a.abc_cycles
     if a.colony_size is not None:
