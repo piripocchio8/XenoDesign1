@@ -221,11 +221,11 @@ def test_cyclic_seq_update_d_fasta_through_loop_keeps_L_coordinators_bare_H():
         # here — position 23 (C-term) is a declared coordinator so it stays His via known_seq…
         # actually _cterm_gly_anchor force-sets fm[-1]=True and overwrites last char to 'G'. To
         # keep the test focused on chirality (not the anchor), neutralize the anchor.
-        mp.setattr(ai, "_cterm_gly_anchor", lambda fn: fn)
+        mp.setattr(ai, "_cterm_gly_anchor", lambda fn, *_, **__: fn)
         # Fake the CIF readers used by _extract.
         mp.setattr(ai, "_self", lambda: SimpleNamespace(
             _make_base_backend=lambda backend: echo_backend,
-            _cterm_gly_anchor=lambda fn: fn,
+            _cterm_gly_anchor=lambda fn, *_, **__: fn,
             _best_cif_path=lambda d: "/tmp/fake.cif",
             _all_atoms_from_chain=lambda cif, ch: (np.zeros((0, 3)), []),
         ))

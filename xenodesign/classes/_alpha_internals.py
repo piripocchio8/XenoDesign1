@@ -253,19 +253,36 @@ def _ensure_cterm_glycine(one_letter: str) -> str:
     return one_letter[:-1] + "G"
 
 
-def _cterm_gly_anchor(backend_fn):
+def _cterm_gly_anchor(backend_fn, coordinator_positions=None):
     """Wrap an InverseFoldingBackend so the binder's C-TERMINAL position is a FIXED Gly anchor:
     non-designable by LigandMPNN (``fixed_mask[-1] = True``) and forced to 'G' in every candidate.
     Keeps the helix core fully designed (no central-Gly artifact). 6-positional-arg signature so it
-    is itself an InverseFoldingBackend (wrappable by MultiCandidate)."""
+    is itself an InverseFoldingBackend (wrappable by MultiCandidate).
+
+    FIX B6: ``coordinator_positions`` (0-based) are DECLARED coordinator positions whose donor
+    identity must survive the loop. When the C-TERMINAL position is itself a declared coordinator
+    (e.g. His24 in a 24-mer with coord at 24), the Gly anchor must NOT clobber it: the C-term is
+    left designable (it is already pinned native via ``frozen_positions`` + ``known_seq``) and the
+    candidate's last residue is preserved verbatim. Without this the C-term coordinator was rewritten
+    to Gly, so the covalent coordination row (``H24@ND1``) referenced a residue that no longer
+    existed -> the resolver returned 0 tokens and the predict crashed (iter_001). A NON-coordinator
+    C-terminus (the alpha default, ``coordinator_positions=None``/empty) still gets the forced Gly,
+    byte-for-byte unchanged."""
+    coord = set(coordinator_positions or ())
+
     def _wrapped(design_backbone, context_coords, context_elements,
                  fixed_mask, temperature, num_seqs, known_seq=None):
         from xenodesign.inverse_folding import call_backend
         fm = list(fixed_mask)
-        if fm:
-            fm[-1] = True   # C-terminal position is non-designable
+        # The C-term is a declared coordinator iff its index is in ``coord``. (len(fm) is the
+        # binder length, so the last index is len(fm)-1.)
+        cterm_is_coordinator = bool(fm) and (len(fm) - 1) in coord
+        if fm and not cterm_is_coordinator:
+            fm[-1] = True   # C-terminal position is non-designable (Gly anchor)
         cands = call_backend(backend_fn, design_backbone, context_coords, context_elements,
                              fm, temperature, num_seqs, known_seq=known_seq)
+        if cterm_is_coordinator:
+            return cands    # C-term coordinator preserved — do NOT force Gly (B6)
         return [(c[:-1] + "G") if c else c for c in cands]   # force the C-terminal Gly anchor
     return _wrapped
 
@@ -407,7 +424,13 @@ def make_alpha_seq_update_fn(wrapper: _LoopBackendWrapper, num_seqs: int = _DEFA
     # never overwritten by the tokenization Gly (correction; ADR-011 / FASTA audit). backend
     # defaults to 'ligandmpnn' => identical to the prior MultiCandidate(_cterm_gly_anchor(...)).
     base = shim._make_base_backend(backend)
-    anchored = shim._cterm_gly_anchor(base)
+    # FIX B6: thread the DECLARED coordinator positions (0-based) into the C-term Gly anchor so a
+    # coordinator AT the C-terminus (e.g. His24 in a 24-mer) is never overwritten to Gly — which
+    # would orphan its covalent coordination row and crash the next predict. Derived from the
+    # `coordinators` list (the cyclic-metal path passes them; alpha passes None -> empty set ->
+    # the forced-Gly behaviour is byte-identical).
+    coordinator_positions = {pos0 for pos0, _ol in (coordinators or ())}
+    anchored = shim._cterm_gly_anchor(base, coordinator_positions=coordinator_positions)
     # B2 (band-aid removed): the DECLARED coordinator identities are no longer re-imposed POST-design
     # by a ``_coordinator_anchor`` wrapper. Instead they are kept fixed NATIVELY — `frozen_positions`
     # sets chain_mask=0 at those positions and the SequenceUpdater threads the real (L-projected)
