@@ -236,19 +236,23 @@ def run_length_sweep(cfg: DesignConfig, ladder=None) -> dict:
 
 
 def _is_mixed_chirality(cfg: DesignConfig) -> bool:
-    """The ABC search applies ONLY to mixed-chirality cases: cyclic + target_type=none (a free
-    mixed-chirality macrocycle / peptide). Homochiral classes (alpha, all-D non_alpha) keep the
-    existing greedy/beam loop."""
-    return cfg.binder_class == "cyclic" and cfg.target.target_type == "none"
+    """ABC mixed-chirality search is now selected purely by the ``--mixed_chirality`` switch
+    (``cfg.mixed_chirality in {"A","B"}``), DECOUPLED from the ``--search`` launcher and applicable
+    to ANY binder/target (cyclic+metal included). ``"none"`` keeps the greedy/beam HalluLoop."""
+    return cfg.mixed_chirality in ("A", "B")
 
 
-def _run_abc(cfg: DesignConfig, backend, seed_one_letter: str, out_dir: "Path") -> dict:
+def _run_abc(cfg: DesignConfig, backend, seed_one_letter: str, out_dir: "Path",
+             variant: str | None = None) -> dict:
     """Wire + run the ABC mixed-chirality search and assemble the result dict.
 
     Objective (decided 2026-06-25): pTM (primary) + C-N termini-distance closure proxy
     (secondary) at K*=10-25 fast Chai steps with the head-to-tail CLOSURE restraint only (NO
     target-specific coordination). Variant A: ABC searches chirality, MPNN fills identity;
     Variant B: ABC searches identity+chirality, MPNN warm-start only.
+
+    ``variant`` (``"a"``/``"b"``), when given, comes from the ``--mixed_chirality`` flag and
+    SUPERSEDES ``cfg.abc.variant``; absent, ``cfg.abc.variant`` is used (legacy / config-file).
 
     ``abc_search`` is referenced via the module global so the dispatch test can monkeypatch it.
     ``loop.py`` is never touched — this is a parallel search path, not a HalluLoop step.
@@ -261,6 +265,7 @@ def _run_abc(cfg: DesignConfig, backend, seed_one_letter: str, out_dir: "Path") 
     from xenodesign.abc.variants import abc_variant_a_design_fn, abc_variant_b_design_fn
 
     knobs = cfg.abc
+    active_variant = variant if variant is not None else knobs.variant
     rng = random.Random(cfg.seed)
 
     # Declared coordinators (1-based) -> 0-based frozen positions. Passed into abc_search so the
@@ -275,7 +280,7 @@ def _run_abc(cfg: DesignConfig, backend, seed_one_letter: str, out_dir: "Path") 
         out_root=out_dir / "abc_evals",
     )
 
-    if knobs.variant == "b":
+    if active_variant == "b":
         # track #2: VALIDATE the configured ncAA palette (CPU-only) before handing it to the move
         # set; an empty palette keeps ncAA OFF (existing behaviour).
         from xenodesign.abc.ncaa import validate_palette
@@ -302,7 +307,7 @@ def _run_abc(cfg: DesignConfig, backend, seed_one_letter: str, out_dir: "Path") 
     result = {
         "case_id": "cyclic",
         "search": "abc",
-        "abc_variant": knobs.variant,
+        "abc_variant": active_variant,
         "fitness_steps": knobs.fitness_steps,
         "selected_nectar": (float(best.nectar) if best is not None and best.nectar is not None
                             else None),
@@ -366,17 +371,14 @@ def run_design(cfg: DesignConfig) -> dict:
     backend, predict_fn = _make_predictor(cfg)
     adapter = _PredictAdapter(backend, predict_fn)
 
-    # ── ABC mixed-chirality search branch (--search abc) ──────────────────────────
-    # Routes mixed-chirality cases (cyclic + target_type=none) through abc_search with the fast
-    # pTM+termini fitness + the chosen variant, IN PLACE of the per-iter HalluLoop step. Homochiral
-    # classes are guarded out (greedy/beam only). ``loop.py`` is never touched.
-    if cfg.loop.search == "abc":
-        if not _is_mixed_chirality(cfg):
-            raise ValueError(
-                "--search abc is mixed-chirality only (cyclic + target_type=none); "
-                f"got binder_class={cfg.binder_class!r} target_type={cfg.target.target_type!r}. "
-                "Homochiral classes use --search greedy/beam.")
-        return _run_abc(cfg, adapter, seed_spec.one_letter, out_dir)
+    # ── ABC mixed-chirality search branch (--mixed_chirality {A,B}) ───────────────
+    # DECOUPLED from the --search launcher: when cfg.mixed_chirality is A/B, route through
+    # abc_search with the fast pTM+termini fitness + the flag-selected variant (A->a / B->b,
+    # superseding cfg.abc.variant), for ANY binder/target. mixed_chirality=none falls through to
+    # the greedy/beam HalluLoop below. ``loop.py`` is never touched.
+    if _is_mixed_chirality(cfg):
+        variant = "b" if cfg.mixed_chirality == "B" else "a"
+        return _run_abc(cfg, adapter, seed_spec.one_letter, out_dir, variant=variant)
 
     # Restraint emission (class-specific; consulted only when restraints are on).
     constraint_path = (cls.restraints(cfg, case, out_dir, (entities, msa_dir))
