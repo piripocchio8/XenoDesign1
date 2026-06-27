@@ -62,10 +62,14 @@ def _is_wellformed(code: str) -> bool:
 
 
 def _resolves(code: str, csv_path=None) -> bool:
-    """True iff ``code`` has a known canonical parent (curated proxy OR MONDE-T parent)."""
-    if _proxy_table_lookup(code) is not None:
-        return True
-    return mondet.mondet_parent(code, csv_path=csv_path) is not None
+    """True iff ``code`` resolves to one of the 20 STANDARD amino acids (curated proxy OR MONDE-T
+    parent). m4: a non-empty MONDE-T parent is NOT enough — terminal caps (ACE/NH2 -> 'CAPS') and
+    multi-residue chromophores (CRO/CR2/NRQ -> 'CHROMOPHORE') resolve but are not amino acids, so
+    they must be rejected. The parent chemistry must be a real residue for MPNN conditioning."""
+    from xenodesign.io_spec import AA1_TO_AA3
+
+    parent = proxy_for(code, csv_path=csv_path)
+    return parent in set(AA1_TO_AA3.values())
 
 
 def proxy_for(code: str, csv_path=None) -> Optional[str]:
