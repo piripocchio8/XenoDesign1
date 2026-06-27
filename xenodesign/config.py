@@ -170,6 +170,10 @@ class AbcKnobs:
     fitness_steps: int = 15           # K* fast diffusion steps (10-25; calibrated cheap point)
     w_ptm: float = 0.7                # pTM weight (primary discriminator)
     w_termini: float = 0.3            # C-N termini-proximity weight (secondary; short-peptide-critical)
+    # Variant-B ncAA palette (track #2): CCD 3-letter codes the identity search may propose,
+    # emitted as ``(XXX)`` in the FASTA. EMPTY = ncAA OFF (default → existing behaviour). A
+    # non-empty list opts in; codes are validated (abc.ncaa.validate_palette) before use.
+    ncaa_palette: list = field(default_factory=list)
 
 
 @dataclass

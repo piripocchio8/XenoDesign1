@@ -30,3 +30,14 @@ def test_abc_knobs_present_on_all_presets():
     for cls in ("alpha", "non_alpha", "cyclic"):
         cfg = resolve_config(cls)
         assert isinstance(cfg.abc, AbcKnobs)
+
+
+def test_ncaa_palette_off_by_default():
+    # ncAA support is OFF unless a palette is provided → existing behaviour unchanged.
+    assert AbcKnobs().ncaa_palette == []
+
+
+def test_ncaa_palette_can_be_overridden():
+    cfg = resolve_config("cyclic", target_type="none",
+                         cli_overrides={"abc.ncaa_palette": ["AIB", "ORN"]})
+    assert cfg.abc.ncaa_palette == ["AIB", "ORN"]
