@@ -83,6 +83,15 @@ def carbonara_design_fn(
     n_res = design_backbone.shape[0]
     fixed_mask = list(fixed_mask)
 
+    # FAIL FAST: a known_seq whose length disagrees with the backbone would otherwise 'A'-pad its
+    # tail below (silently dropping pinned coordinator identities). Raise instead, mirroring the
+    # `len(one) != n_res` guard on the CARBonAra-output side.
+    if known_seq is not None and len(known_seq) != n_res:
+        raise ValueError(
+            f"known_seq length {len(known_seq)} != n_res {n_res} "
+            "(would silently 'A'-pad, dropping pinned identities)"
+        )
+
     # fixed_mask is 0-based; CARBonAra --known_positions is 1-based over the design chain (chain A
     # is first in PDB order, so residue indices 1..n_res map directly). OFF-BY-ONE lives here.
     known_positions = [i + 1 for i, fixed in enumerate(fixed_mask) if fixed]

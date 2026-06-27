@@ -467,3 +467,29 @@ def test_coordinator_identity_and_chirality_through_updater():
     assert toks[11] == "(DHI)"   # D-His -> D-CCD block
     assert toks[17] == "H"
     assert toks[23] == "(DHI)"
+
+
+def test_ligandmpnn_known_seq_wrong_length_raises():
+    # FAIL FAST: a known_seq whose length != n_res would otherwise silently fall back to
+    # all-Ala (dropping pinned coordinator identities). The backend must raise a clear
+    # ValueError BEFORE any heavy torch / weights machinery. (CPU-safe: the guard runs
+    # before `import torch`.)
+    from xenodesign.sequence_update import _ligandmpnn_design_fn
+
+    bb = np.zeros((4, 4, 3))  # n_res == 4
+    with pytest.raises(ValueError, match="known_seq length"):
+        _ligandmpnn_design_fn(bb, np.zeros((0, 3)), [], [False] * 4,
+                              temperature=0.1, num_seqs=1, known_seq="AAA")  # len 3
+
+
+def test_ligandmpnn_known_seq_correct_length_passes_guard():
+    # A correctly-sized known_seq must NOT trip the known_seq length guard; it proceeds past
+    # the guard (and then fails later on torch/weights, which is NOT the known_seq ValueError).
+    from xenodesign.sequence_update import _ligandmpnn_design_fn
+
+    bb = np.zeros((4, 4, 3))  # n_res == 4
+    with pytest.raises(Exception) as exc:
+        _ligandmpnn_design_fn(bb, np.zeros((0, 3)), [], [False] * 4,
+                              temperature=0.1, num_seqs=1, known_seq="ACDE")  # len 4
+    # Whatever fails downstream, it must not be the known_seq length complaint.
+    assert "known_seq length" not in str(exc.value)

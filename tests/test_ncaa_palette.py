@@ -33,3 +33,24 @@ def test_validate_dedupes_preserving_order():
 
 def test_validate_empty_is_empty():
     assert validate_palette([]) == []
+
+
+def test_validate_rejects_caps_and_chromophores():
+    # m4: terminal caps (ACE/NH2 -> parent 'CAPS') and multi-residue chromophores
+    # (CRO/CR2/NRQ -> parent 'CHROMOPHORE') resolve in MONDE-T but are NOT real amino
+    # acids; they must NOT leak into the 'all'/'d_common' palettes.
+    assert validate_palette(["ACE", "NH2", "CRO", "CR2", "NRQ"]) == []
+
+
+def test_validate_accepts_normal_ncaa_with_canonical_aa_parent():
+    # m4: a normal ncAA whose resolved parent IS one of the 20 standard AAs survives.
+    # MSE -> MET, AIB -> a standard AA (Gly), both accepted.
+    assert validate_palette(["MSE"]) == ["MSE"]
+    assert validate_palette(["AIB"]) == ["AIB"]
+
+
+def test_validate_still_accepts_d_canonicals():
+    # m4: the D-canonical CCD codes (parent = the standard L AA, e.g. DAL->ALA) stay valid.
+    from xenodesign.abc.ncaa import D_CANONICAL
+
+    assert validate_palette(list(D_CANONICAL)) == list(D_CANONICAL)
