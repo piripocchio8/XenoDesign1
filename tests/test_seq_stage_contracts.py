@@ -93,3 +93,18 @@ def test_invariant3_never_overwrites_a_frozen_cterm_position():
     out = stage.ensure_canonical_anchor("ACDH", chirality_pattern=pattern, frozen=frozen)
     assert out[3] == "H"                          # frozen coordinator preserved
     assert out.count("G") == 1 and out[2] == "G"  # Gly placed at the last NON-frozen position
+
+
+def test_invariant4_determinism_same_inputs_same_output():
+    """Invariant #4: same inputs -> byte-identical known_seq, d_fasta, anchored seq."""
+    prev = "MKWVTFGLAG"
+    frozen = {FrozenPosition(position0=2, identity="H", chirality="D")}
+    pattern = {i: ("D" if i == 2 else "L") for i in range(len(prev))}
+
+    def run():
+        s = SequenceUpdate(frozen=frozen)
+        known = s.build_known_seq(prev_l_seq=prev)
+        anchored = s.ensure_canonical_anchor(known, chirality_pattern=pattern)
+        return known, anchored, s.encode_d_fasta(anchored, chirality_pattern=pattern)
+
+    assert run() == run()            # repeatable, no hidden RNG / dict-order nondeterminism
