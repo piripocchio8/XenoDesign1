@@ -51,6 +51,16 @@ def test_mondet_parent_lookup():
     assert mondet.mondet_parent("NOSUCH", csv_path=FIXTURE) is None
 
 
+def test_mondet_parent_matches_load_mondet_for_every_code():
+    # m5: mondet_parent is now backed by a cached {code: parent} dict (O(1)) instead of a
+    # linear scan. Behaviour MUST be unchanged: for EVERY code in the catalog it returns the
+    # exact same parent as the canonical load_mondet() view (and None for unknown codes).
+    rows = mondet.load_mondet(FIXTURE)
+    for code, parent, _count in rows:
+        assert mondet.mondet_parent(code, csv_path=FIXTURE) == (parent or None)
+    assert mondet.mondet_parent("ZZZNOPE", csv_path=FIXTURE) is None
+
+
 def test_default_csv_path_resolves_to_repo_root():
     # No hardcoded /home: the default path resolves relative to the repo and exists.
     p = mondet.default_csv_path()

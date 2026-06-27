@@ -109,10 +109,19 @@ def top_ncaa_excluding(
     return ncaa_codes(csv_path, exclude=exclude)[: max(0, int(n))]
 
 
+@functools.lru_cache(maxsize=8)
+def _parent_index(csv_path: str) -> dict[str, str]:
+    """Cached {CODE: parent} map for O(1) ``mondet_parent`` lookups (m5).
+
+    Backs ``mondet_parent`` so ``validate_palette('all')`` is no longer O(n^2). Empty parents are
+    dropped so a hit always carries a real parent (matching the prior ``parent or None`` semantics).
+    Paired with the existing ``_load_ranked`` lru_cache; keyed by the resolved csv path string.
+    """
+    return {code: parent for code, parent, _count in _load_ranked(csv_path) if parent}
+
+
 def mondet_parent(code: str, csv_path: str | Path | None = None) -> Optional[str]:
     """Canonical 3-letter parent for a MONDE-T code, or None if the code is not in the catalog."""
     want = (code or "").strip().upper()
-    for c, parent, _count in load_mondet(csv_path):
-        if c == want:
-            return parent or None
-    return None
+    path = str(Path(csv_path) if csv_path is not None else default_csv_path())
+    return _parent_index(path).get(want)
