@@ -59,3 +59,71 @@ def build_run_restraints(cfg, *, out_dir, case=None, target_ctx=None, roles=None
     # REQUIRE guard); it reads coord_residues + the closure default from cfg. target_ctx carries the
     # assembled entity list when available (drives the Zn/binder chain split); None -> legacy order.
     return Cyclic().restraints(cfg, case, out_dir, target_ctx)
+
+
+def build_run_gates(cfg, *, roles=None, panel=None, last_out_dir_fn=None):
+    """The spec §3 uniform GATE composer: pick the accept gates for this run from (binder_class,
+    target_type, gate knobs) and AND-compose them. Returns a single ``accept_fn`` or ``None``.
+
+    Flat, fully-overridable lookup (ponytail: no rules engine — same shape as resolve_defaults will
+    take in S3b):
+      * class == 'alpha'  AND cfg.gates.periodicity   -> periodicity_gated_accept
+      * class == 'non_alpha'                            -> alpha_demote_gated_accept (anti-alpha)
+      * target == 'metal' AND cfg.gates.metal_geometry -> metalhawk_gated_accept
+      * cfg.gates.pll_veto                              -> (pLM veto; the existing referee channel —
+                                                            applied at panel time, so NOT a loop gate
+                                                            here; documented, no double-application)
+
+    ``compose_accept_fns`` is None-safe: no surviving gate -> None (the loop's accept-always default,
+    byte-identical to legacy when no gate applies).
+
+    Args:
+        cfg: DesignConfig (from resolve_config).
+        roles: ChainRoles or None (threaded from dispatch; not used directly here yet).
+        panel: Optional JudgePanel with score_fn for alpha_demote_gated_accept. When None a stub
+               panel is constructed (returns helix_fraction=None -> always-accept, best-effort).
+        last_out_dir_fn: Optional ``() -> Path`` that returns the most recent per-step output dir;
+               required for MetalHawk to locate the predicted CIF. None -> pass-through accept.
+    """
+    from xenodesign.loop import (
+        alpha_demote_gated_accept, compose_accept_fns, metalhawk_gated_accept,
+        periodicity_gated_accept,
+    )
+
+    gates = []
+    if cfg.binder_class == "alpha" and cfg.gates.periodicity:
+        gates.append(periodicity_gated_accept(heptad_thresh=cfg.gates.heptad_thresh))
+    if cfg.binder_class == "non_alpha":
+        # alpha_demote_gated_accept requires a JudgePanel with score_fn. When no real panel is
+        # injected (e.g. CPU-only unit tests or pre-S3a.4 callers) supply a best-effort stub:
+        # helix_fraction=None -> gate always accepts (mirrors the "never crash a trajectory" rule).
+        _panel = panel
+        if _panel is None:
+            from xenodesign.judges.panel import JudgePanel, RefereeScore
+            _panel = JudgePanel(score_fn=lambda step: RefereeScore(helix_fraction=None))
+        gates.append(alpha_demote_gated_accept(_panel))
+    if cfg.target.target_type == "metal" and cfg.gates.metal_geometry:
+        gates.append(metalhawk_gated_accept(_make_metalhawk_score_fn(cfg, last_out_dir_fn)))
+    return compose_accept_fns(*gates)
+
+
+def _make_metalhawk_score_fn(cfg, last_out_dir_fn):
+    """A ``score_fn(step) -> GateResult`` reading the step's predicted CIF and running the (best-
+    effort, subprocess-isolated) MetalHawk geometry gate. ``last_out_dir_fn() -> dir`` locates the
+    per-step CIF (the wrapper records ``last_out_dir``); a missing CIF -> a pass-through GateResult
+    (ok=False), which the gate accepts. Monkeypatched in CPU tests (MetalHawk env never invoked)."""
+    from xenodesign.eval.metal_geometry_gate import GateResult, metal_geometry_gate
+
+    thresh = float(cfg.gates.metal_perplexity_thresh)
+
+    def _score(step):
+        try:
+            if last_out_dir_fn is None:
+                return GateResult(passed=True, ok=False, error="no out_dir fn")
+            from xenodesign.cif_io import _best_cif_path
+            cif = _best_cif_path(last_out_dir_fn())
+            return metal_geometry_gate(cif, threshold=thresh)
+        except Exception as exc:  # never crash a design run
+            return GateResult(passed=True, ok=False, error=f"{type(exc).__name__}: {exc}")
+
+    return _score
