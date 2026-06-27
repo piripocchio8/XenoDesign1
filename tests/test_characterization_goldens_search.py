@@ -142,3 +142,49 @@ def test_golden_search_beam_alpha(tmp_path, monkeypatch):
     report = dispatch.run_design(cfg)
     golden = _load_or_regold("beam_alpha", report)
     assert _drop_runspecific(json.loads(json.dumps(report, default=str))) == golden
+
+
+# ── ABC Variant-A baseline ─────────────────────────────────────────────────────
+# Captures the CURRENT (buggy) ABC-A output: all-Ala design_codes + empty context_coords /
+# context_elements in abc_variant_a_design_fn (variants.py:104-112). This is the S2.0b
+# baseline; the POINT is to pin the CURRENT behaviour — do NOT fix anything here.
+
+import xenodesign.dispatch as dispatch_mod  # noqa: F401 — explicit seam reference per brief
+
+
+def _abc_fakes(monkeypatch):
+    """Fake the ABC fitness (deterministic, structure-publishing) so abc_search runs on CPU with
+    the REAL variant design_fns + engine. The fitness scores by sequence diversity so selection is
+    deterministic and the design_fn's output is what drives the result."""
+    def _fake_make_fitness(backend, **k):
+        def fitness(sequence, chirality_pattern):
+            fitness.last_structure = None   # no CIF in the CPU fake (Variant A falls back to zeros)
+            # Reward identity diversity (favours a non-degenerate sequence) deterministically.
+            return float(len(set(sequence)))
+        fitness.last_structure = None
+        return fitness
+
+    monkeypatch.setattr("xenodesign.abc.fitness.make_abc_fitness", _fake_make_fitness)
+    # _run_abc imports make_abc_fitness from xenodesign.abc.fitness at call time; patch both the
+    # source and the dispatch-local import path to be safe.
+    monkeypatch.setattr("xenodesign.dispatch.target_entities",
+                        lambda cfg: ([], None, None))
+    monkeypatch.setattr(dispatch, "_ensure_patches", lambda: None)
+    monkeypatch.setattr(dispatch, "_make_predictor",
+                        lambda cfg: (_FakePred(), lambda *a, **k: _FakePred()))
+    # The Variant-A design_fn wraps _ligandmpnn_design_fn (dispatch.py:317). Echo known_seq so the
+    # routed-vs-buggy difference is observable in the selected identity.
+    monkeypatch.setattr("xenodesign.sequence_update._ligandmpnn_design_fn", _echo_mpnn,
+                        raising=True)
+
+
+def test_golden_search_abc_a(tmp_path, monkeypatch):
+    _abc_fakes(monkeypatch)
+    cfg = resolve_config("cyclic", target_type="none", out_dir=str(tmp_path),
+                         cli_overrides={"use_pepmlm": False, "use_pll": False,
+                                        "restraints_on": False, "mixed_chirality": "A",
+                                        "abc.cycles": 2, "abc.colony_size": 3,
+                                        "abc.scout_limit": 2, "abc.chai_eval_budget": 12})
+    report = dispatch.run_design(cfg)
+    golden = _load_or_regold("abc_a", report)
+    assert _drop_runspecific(json.loads(json.dumps(report, default=str))) == golden
