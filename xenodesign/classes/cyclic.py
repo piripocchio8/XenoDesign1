@@ -774,8 +774,12 @@ class Cyclic:
         ``roles`` threads the dispatch chain contract: metal case (Zn=A) -> binder 'B';
         no-target free peptide -> binder/context BOTH 'A' (the bug that crashed iter_000)."""
         from xenodesign.classes.alpha import make_alpha_seq_update_fn
+        # Freeze declared coordinators in the MPNN mask so pinned donors (e.g. His) never
+        # drift. coord_residues tuple[0] is the 1-based position -> 0-based for the mask.
+        frozen_positions = {int(t[0]) - 1 for t in self._coord_residues(cfg)}
         return make_alpha_seq_update_fn(wrapper, num_seqs=cfg.loop.num_seqs,
-                                        backend=cfg.loop.backend, roles=roles)
+                                        backend=cfg.loop.backend, roles=roles,
+                                        frozen_positions=frozen_positions or None)
 
     def accept_fns(self, cfg):
         from xenodesign.loop import compose_accept_fns

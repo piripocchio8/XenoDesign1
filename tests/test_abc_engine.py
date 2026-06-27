@@ -48,6 +48,30 @@ def test_abc_converges_toward_optimum():
     assert len(history) >= 1
 
 
+def test_abc_search_freezes_coordinator_chirality():
+    # Part D: with frozen={5,11,17,23}, a short search must NEVER change the chirality
+    # at the frozen (pinned coordinator) positions from the seed handedness.
+    n = 24
+    frozen = {5, 11, 17, 23}
+    seed_pat = {i: "L" for i in range(n)}
+    for i in frozen:
+        seed_pat[i] = "D"
+    init = [FoodSource("A" * n, dict(seed_pat), None, None)]
+    best, _ = abc_search(
+        init,
+        _synthetic_fitness,
+        _identity_design_fn,
+        n_cycles=30,
+        colony_size=8,
+        scout_limit=5,
+        chai_eval_budget=10_000,
+        frozen=frozen,
+        rng=random.Random(1),
+    )
+    for i in frozen:
+        assert best.chirality_pattern[i] == seed_pat[i]
+
+
 def test_abc_respects_eval_budget():
     calls = {"n": 0}
 

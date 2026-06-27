@@ -251,3 +251,41 @@ def test_update_chirality_pattern_length_must_match():
                    design_codes=["DAL", "DLE"],
                    context_coords=np.zeros((0, 3)), context_elements=[],
                    chirality_pattern={0: "D"})       # too short
+
+
+# --- Part C: frozen_positions force coordinator positions fixed in the MPNN mask ---
+def test_frozen_positions_force_fixed_mask_true():
+    # Coordinator positions (0-based) must be True in fixed_mask even when they would
+    # otherwise be designable (all-D codes -> every position designable after reflection).
+    captured = {}
+
+    def capture_fn(bb, cc, ce, fixed_mask, t, n):
+        captured["mask"] = list(fixed_mask)
+        return ["A" * bb.shape[0] for _ in range(n)]
+
+    frozen = {5, 11, 17, 23}
+    upd = SequenceUpdater(design_fn=capture_fn, frozen_positions=frozen)
+    upd.update(
+        design_backbone=np.zeros((24, 4, 3)),
+        design_codes=["DAL"] * 24,           # all designable after reflection
+        context_coords=np.zeros((0, 3)), context_elements=[],
+    )
+    for i in range(24):
+        assert captured["mask"][i] is (i in frozen)
+
+
+def test_frozen_positions_default_none_unchanged():
+    # No frozen_positions -> mask is purely the designability mask (no regression).
+    captured = {}
+
+    def capture_fn(bb, cc, ce, fixed_mask, t, n):
+        captured["mask"] = list(fixed_mask)
+        return ["A" * bb.shape[0] for _ in range(n)]
+
+    upd = SequenceUpdater(design_fn=capture_fn)
+    upd.update(
+        design_backbone=np.zeros((3, 4, 3)),
+        design_codes=["DAL", "SEP", "DLE"],  # SEP ncAA -> fixed at index 1 only
+        context_coords=np.zeros((0, 3)), context_elements=[],
+    )
+    assert captured["mask"] == [False, True, False]

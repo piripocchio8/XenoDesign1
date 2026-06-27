@@ -383,7 +383,8 @@ def _make_base_backend(backend: str = "ligandmpnn"):
 # ── Drift-fixed sequence-update closure (spec §5 oversample lever) ──────────────
 
 def make_alpha_seq_update_fn(wrapper: _LoopBackendWrapper, num_seqs: int = _DEFAULT_NUM_SEQS,
-                             backend: str = "ligandmpnn", roles=None):
+                             backend: str = "ligandmpnn", roles=None,
+                             frozen_positions=None):
     """Build the loop's sequence_update_fn(prediction) -> one-letter L seq, wiring the
     P2 drift fix: a SequenceUpdater whose design_fn is a MultiCandidate over the selected
     context-aware inverse-folding base (oversample `num_seqs`, spec §5).
@@ -417,7 +418,9 @@ def make_alpha_seq_update_fn(wrapper: _LoopBackendWrapper, num_seqs: int = _DEFA
     base = shim._make_base_backend(backend)
     design_fn = MultiCandidate(shim._cterm_gly_anchor(base), num_seqs=num_seqs,
                                key_fn=sequence_quality_key)
-    updater = SequenceUpdater(design_fn=design_fn)
+    # frozen_positions (0-based): declared coordinator positions forced fixed in the MPNN
+    # mask so pinned donors never drift (cyclic-metal). alpha path passes None → no change.
+    updater = SequenceUpdater(design_fn=design_fn, frozen_positions=frozen_positions)
 
     # CHAIN CONTRACT: the binder + context chain letters come from the ChainRoles value the
     # dispatcher computed ONCE from the assembled entity list — NOT a hardcoded letter. roles=None

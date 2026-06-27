@@ -130,3 +130,20 @@ def test_seed_required_overrides_even_when_prior_would_differ():
     for s in range(5):
         p = seed_chirality_pattern(10, required={0: "D", 9: "D"}, rng=random.Random(s))
         assert p[0] == "D" and p[9] == "D"
+
+
+# ── Part D: frozen coordinator positions are never chirality-mutated ─────────────
+def test_perturb_chirality_never_flips_frozen_positions():
+    from xenodesign.abc.engine import _perturb_chirality
+
+    n = 24
+    frozen = {5, 11, 17, 23}
+    # seed pattern with a fixed handedness at the frozen (coordinator) positions.
+    pattern = {i: "L" for i in range(n)}
+    for i in frozen:
+        pattern[i] = "D"
+    rng = random.Random(0)
+    for _ in range(2000):
+        out = _perturb_chirality(pattern, rng, frozen=frozen)
+        for i in frozen:
+            assert out[i] == pattern[i]   # coordinator handedness never changes

@@ -53,10 +53,14 @@ class SequenceUpdater:
         design_fn: Optional[Callable] = None,
         axis: int = 0,
         temperature: float = 0.1,
+        frozen_positions: Optional[set] = None,
     ):
         self._design_fn = self._as_backend(design_fn or _ligandmpnn_design_fn)
         self._axis = axis
         self._temperature = temperature
+        # 0-based positions (e.g. declared metal coordinators) forced fixed in the MPNN
+        # sequence-update REGARDLESS of designability, so pinned donors never drift.
+        self._frozen_positions = set(frozen_positions or ())
 
     @staticmethod
     def _as_backend(fn: Callable):
@@ -92,6 +96,12 @@ class SequenceUpdater:
         )
         designable = designable_positions(design_codes, flip)
         fixed_mask = [not d for d in designable]  # True where position must stay fixed
+        # OR in the declared frozen positions (coordinators): force them fixed even when
+        # designability would mark them designable, so pinned donors are never mutated.
+        if self._frozen_positions:
+            fixed_mask = [
+                fixed or (i in self._frozen_positions) for i, fixed in enumerate(fixed_mask)
+            ]
 
         candidates = self._design_fn(
             prepared.design_backbone,
