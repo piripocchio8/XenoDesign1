@@ -77,6 +77,55 @@ class SequenceUpdate:
                 return one_letter[:i] + "G" + one_letter[i + 1:]
         return one_letter                # every position frozen (impossible in practice)
 
+    def build_loop_fn(self, extract_fn, chirality_pattern=None):
+        """Assemble the four primitives into ``fn(prediction) -> str`` for HalluLoop.
+
+        `extract_fn(prediction)` returns design_backbone / context_coords / context_elements /
+        prev_l_seq. Per call: build the real known_seq (invariant #1), run the de-gamed
+        SequenceUpdater (MultiCandidate + sequence_quality_key, invariant: de-gaming), apply the
+        canonical anchor (invariant #3), then emit one_letter (all-D path) or the per-position
+        d_fasta (invariant #2). frozen positions are forced fixed in the MPNN mask.
+        """
+        from xenodesign.inverse_folding import MultiCandidate
+        from xenodesign.scorer import sequence_quality_key
+        from xenodesign.sequence_update import SequenceUpdater
+
+        frozen0 = {fp.position0 for fp in self.frozen}
+        design_fn = MultiCandidate(self._design_fn, num_seqs=self.num_seqs,
+                                   key_fn=sequence_quality_key)
+        updater = SequenceUpdater(design_fn=design_fn,
+                                  frozen_positions=frozen0 or None)
+
+        def _fn(prediction) -> str:
+            ext = extract_fn(prediction)
+            prev = ext["prev_l_seq"]
+            known = self.build_known_seq(prev_l_seq=prev)
+            n = len(known)
+            # design_codes carry the REAL identity (L-projected) per position so the SequenceUpdater
+            # feeds it as known_seq — invariant #1. Frozen donors keep their declared handedness.
+            from xenodesign.io_spec import AA1_TO_AA3
+            from xenodesign.mirror import L_TO_D
+            pat = dict(chirality_pattern or {})
+            codes = []
+            for i, ch in enumerate(known):
+                three = AA1_TO_AA3.get(ch.upper(), "ALA")
+                codes.append(L_TO_D.get(three, three) if pat.get(i, "D") == "D" else three)
+            result = updater.update(
+                design_backbone=ext["design_backbone"],
+                design_codes=codes,
+                context_coords=ext["context_coords"],
+                context_elements=ext["context_elements"],
+                chirality_pattern=({i: pat.get(i, "D") for i in range(n)}
+                                   if chirality_pattern is not None else None),
+            )
+            anchored = self.ensure_canonical_anchor(result.one_letter,
+                                                    chirality_pattern=chirality_pattern)
+            if chirality_pattern is None:
+                return anchored
+            return self.encode_d_fasta(anchored, chirality_pattern=chirality_pattern)
+
+        return _fn
+
     def build_known_seq(self, prev_l_seq: str, frozen=None) -> str:
         """Invariant #1 (real evolving context) + frozen-identity override.
 
