@@ -452,6 +452,32 @@ def alpha_demote_gated_accept(
     return _gate
 
 
+def metalhawk_gated_accept(
+    score_fn: Callable[["LoopStep"], object],
+) -> Callable[["LoopStep", "LoopStep"], bool]:
+    """Factory for a metal-coordination-GEOMETRY acceptance gate (MetalHawk).
+
+    ``score_fn(candidate_step) -> GateResult`` (xenodesign.eval.metal_geometry_gate.GateResult) runs
+    MetalHawk on the step's predicted metal site. Best-effort contract: a result with ``ok=False``
+    (the gate could not run — no MetalHawk dir, no metal, parse failure) ACCEPTS (a gate that cannot
+    run never vetoes a design). A result with ``ok=True and passed=False`` (a confident, BAD
+    coordination geometry) REJECTS. ``passed=True`` accepts. This makes the MetalHawk geometry check
+    uniform across strategies (today it runs only in the cyclic result assembly, never as a gate).
+    """
+    def _gate(candidate_step: "LoopStep", current_step: "LoopStep") -> bool:
+        res = score_fn(candidate_step)
+        if not getattr(res, "ok", False):
+            return True                      # best-effort: a gate that cannot run never vetoes
+        if not getattr(res, "passed", True):
+            logger.info("metalhawk_gated_accept: REJECT — geometry=%s perplexity=%s > %s",
+                        getattr(res, "geometry", None), getattr(res, "perplexity", None),
+                        getattr(res, "threshold", None))
+            return False
+        return True
+
+    return _gate
+
+
 def compose_accept_fns(
     *gates: Optional[Callable[["LoopStep", "LoopStep"], bool]],
 ) -> Optional[Callable[["LoopStep", "LoopStep"], bool]]:
