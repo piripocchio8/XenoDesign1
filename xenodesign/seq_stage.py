@@ -63,7 +63,30 @@ class SequenceUpdate:
 
         `chirality_pattern` is 0-based {pos: 'L'|'D'}; positions absent default to 'D' (the
         historical all-D backbone default). `frozen` positions are excluded from placement.
+
+        HARDENING (S3a.1b/#18): raises ``ValueError`` if any bare (non-parenthesized) letter is
+        not in the 20-residue canonical AA1_TO_AA3 alphabet.  Pre-encoded ncAA ``(XXX)`` blocks
+        are skipped — they are valid extended tokens, not unknown letters.  The anchor's job is to
+        guarantee >=1 canonical residue in a VALID all-D chain; it is NOT a rescue path for
+        genuinely-unknown letters.
         """
+        if not one_letter:
+            return one_letter
+        # Validate every bare letter; skip parenthesized ncAA/D-CCD blocks.
+        from xenodesign.io_spec import AA1_TO_AA3
+        i = 0
+        while i < len(one_letter):
+            ch = one_letter[i]
+            if ch == "(":
+                j = one_letter.find(")", i)
+                i = j + 1 if j != -1 else len(one_letter)
+            else:
+                if ch not in AA1_TO_AA3:
+                    raise ValueError(
+                        f"ensure_canonical_anchor: unknown amino-acid letter {ch!r} "
+                        f"in sequence {one_letter!r}"
+                    )
+                i += 1
         if "G" in one_letter:
             return one_letter
         n = len(one_letter)
