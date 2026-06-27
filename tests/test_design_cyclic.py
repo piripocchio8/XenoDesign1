@@ -171,6 +171,122 @@ def test_cyclic_chirality_emits_bare_H_for_L_and_DHI_for_D():
         assert r.one_letter[i] == "H"
 
 
+def test_cyclic_seq_update_d_fasta_through_loop_keeps_L_coordinators_bare_H():
+    """INTEGRATION (the all-D regression): run the cyclic seq-update through the REAL
+    make_alpha_seq_update_fn (with CPU fakes for the predictor extractor + base backend),
+    then through the loop's _to_d_fasta_safe re-encode — exactly the greedy loop path
+    (loop.py: new_seq = seq_update_fn(pred); state.d_fasta = _to_d_fasta_safe(new_seq)).
+
+    The d_fasta that would be fed to Chai the NEXT iteration MUST carry bare 'H' at the L
+    coordinators (6/18 -> 0-based 5/17) and '(DHI)' at the D coordinators (12/24 -> 11/23),
+    NOT the all-D '(DHI)x24' that to_d_fasta produces. This reproduces the GPU-confirmed
+    all-D regression (selected_d_fasta = (DHI)x23): coordinators 6/18 came out D."""
+    import numpy as np
+    from types import SimpleNamespace
+
+    import xenodesign.classes.alpha as alpha_mod
+    import xenodesign.classes._alpha_internals as ai
+    from xenodesign.abc.moves import identity_tokens
+    from xenodesign.loop import _to_d_fasta_safe
+
+    n = 24
+    # Coordinators (1-based) L@6,D@12,L@18,D@24 -> 0-based 5/11/17/23.
+    coord_residues = [(6, "H", "HIS", "L"), (12, "H", "DHI", "D"),
+                      (18, "H", "HIS", "L"), (24, "H", "DHI", "D")]
+    frozen = {int(t[0]) - 1 for t in coord_residues}
+    coordinators = [(int(t[0]) - 1, t[1]) for t in coord_residues]
+    chirality_pattern = {int(t[0]) - 1: t[3] for t in coord_residues}
+
+    # Base backend that echoes known_seq at fixed positions (LigandMPNN's native behaviour),
+    # 'A' elsewhere — so the four His coordinators are preserved by identity.
+    def echo_backend(bb, cc, ce, fm, t, num_seqs, known_seq=None):
+        return ["".join(known_seq[i] if fm[i] else "A" for i in range(bb.shape[0]))
+                for _ in range(num_seqs)]
+
+    # A fake wrapper holding a CIF dir (its presence is all _extract needs since we fake the
+    # cif readers). last_out_dir must be set or _extract raises.
+    wrapper = SimpleNamespace(last_out_dir="/tmp/fake_iter")
+
+    # design_codes the cyclic _extract would build: His CCD at coordinators (L->HIS, D->DHI),
+    # all-D Ala elsewhere. We fake the backbone/context readers to return synthetic data; the
+    # design_codes themselves are built INSIDE make_alpha_seq_update_fn from `coordinators` +
+    # `chirality_pattern`, so we only need to fake the geometry readers.
+    fake_bb = [{"N": (0.0, 0.0, 0.0), "CA": (1.0, 0.0, 0.0), "C": (2.0, 0.0, 0.0),
+                "CB": (1.0, 1.0, 0.0)} for _ in range(n)]
+
+    import pytest as _pytest
+    with _pytest.MonkeyPatch.context() as mp:
+        mp.setattr(ai, "_make_base_backend", lambda backend: echo_backend)
+        # _cterm_gly_anchor wraps the base; keep it (it forces a C-term Gly). The anchor is fine
+        # here — position 23 (C-term) is a declared coordinator so it stays His via known_seq…
+        # actually _cterm_gly_anchor force-sets fm[-1]=True and overwrites last char to 'G'. To
+        # keep the test focused on chirality (not the anchor), neutralize the anchor.
+        mp.setattr(ai, "_cterm_gly_anchor", lambda fn: fn)
+        # Fake the CIF readers used by _extract.
+        mp.setattr(ai, "_self", lambda: SimpleNamespace(
+            _make_base_backend=lambda backend: echo_backend,
+            _cterm_gly_anchor=lambda fn: fn,
+            _best_cif_path=lambda d: "/tmp/fake.cif",
+            _all_atoms_from_chain=lambda cif, ch: (np.zeros((0, 3)), []),
+        ))
+        # backbone_by_residue_from_cif is imported inside make_alpha_seq_update_fn from
+        # eval.gate_tier0a; patch it there.
+        import xenodesign.eval.gate_tier0a as g0
+        mp.setattr(g0, "backbone_by_residue_from_cif",
+                   lambda cif, chain: fake_bb)
+
+        seq_update_fn = alpha_mod.make_alpha_seq_update_fn(
+            wrapper, num_seqs=1, backend="ligandmpnn", roles=None,
+            frozen_positions=frozen, coordinators=coordinators,
+            chirality_pattern=chirality_pattern)
+
+        pred = SimpleNamespace(coords=np.zeros((n, 3)), iptm=0.5)
+        new_seq = seq_update_fn(pred)
+
+    # The greedy loop re-encodes the seq_update output via _to_d_fasta_safe before feeding
+    # Chai the next iteration. This is where the all-D override historically struck.
+    d_fasta = _to_d_fasta_safe(new_seq)
+    toks = identity_tokens(d_fasta)
+    assert len(toks) == n
+    # L coordinators (6/18 -> 5/17) MUST be bare 'H', NOT '(DHI)'.
+    assert toks[5] == "H", f"L coord 6 came out {toks[5]!r} (all-D regression)"
+    assert toks[17] == "H", f"L coord 18 came out {toks[17]!r} (all-D regression)"
+    # D coordinators (12/24 -> 11/23) stay '(DHI)'.
+    assert toks[11] == "(DHI)"
+    assert toks[23] == "(DHI)"
+
+
+def test_seed_d_fasta_keeps_L_coordinators_bare_for_mixed_seed():
+    """The iter_000 seed encode (_seed_d_fasta) must honour a mixed L/D fixed_chirality: L
+    coordinators stay bare canonical, every other position is D-CCD — NOT whole-chain all-D."""
+    from types import SimpleNamespace
+    from xenodesign.abc.moves import identity_tokens
+    from xenodesign.dispatch import _seed_d_fasta
+
+    # His at 1-based 6/12/18/24 (L/D/L/D), Ala elsewhere; cyclic-style 24-mer seed.
+    one = list("A" * 24)
+    for p in (6, 12, 18, 24):
+        one[p - 1] = "H"
+    seed = SimpleNamespace(one_letter="".join(one),
+                           fixed_chirality={6: "L", 12: "D", 18: "L", 24: "D"})
+    d_fasta = _seed_d_fasta(seed)
+    toks = identity_tokens(d_fasta)
+    assert toks[5] == "H" and toks[17] == "H"           # L coords -> bare H
+    assert toks[11] == "(DHI)" and toks[23] == "(DHI)"  # D coords -> D-CCD
+    assert toks[0] == "(DAL)"                            # non-coord backbone stays all-D
+
+
+def test_seed_d_fasta_all_D_seed_unchanged():
+    """A pure all-D seed (no 'L' pinned — the alpha/non_alpha default) is encoded byte-for-byte
+    by the legacy to_d_fasta path."""
+    from types import SimpleNamespace
+    from xenodesign.dispatch import _seed_d_fasta
+    from xenodesign.io_spec import to_d_fasta
+
+    seed = SimpleNamespace(one_letter="ACDEFG", fixed_chirality={})
+    assert _seed_d_fasta(seed) == to_d_fasta("ACDEFG")
+
+
 # ── B6: Gly never clobbers a coordinator; only fires when truly no L present ─────
 
 def test_ensure_canonical_anchor_excludes_coordinators():
