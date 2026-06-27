@@ -33,9 +33,13 @@ from xenodesign.seed import RandomSeedGenerator, SeedResult, insert_fixed_chiral
 # Re-export the seeding policy's His chirality map so the class + tests share one source.
 CYCLIC_HIS_CHIRALITY: dict = dict(_CYCLIC_HIS_CHIRALITY)
 
-# The Zn(II) cofactor enters Chai as a SMILES ligand entity (chai_lab encodes ligands as
-# `>ligand|name=...` + SMILES). Zinc(II) is the bare metal cation SMILES.
+# The Zn(II) cofactor: bare metal-cation SMILES, kept for the SMILES fallback path + provenance.
 ZN_SMILES = "[Zn+2]"
+# METAL-(b): default — feed the metal as a CCD residue (code 'ZN') so chai tokenizes a resolvable
+# residue+atom (residue ZN, atom ZN) for atom-aware coordination, instead of the SMILES form
+# (residue 'LIG', atom 'ZN1', unresolvable). chai_patches._patch_ligand_ccd_feeding recognises the
+# `>ligand|name=ZN` + 'ZN' sequence form and builds the cached-conformer residue.
+ZN_CCD = "ZN"
 
 _DEFAULT_DEVICE = None  # unset -> resolve_device() (XENO_DEVICE / cuda:0 if avail / mps / cpu)
 # 6UFA is a tetrahedral [Zn(His)4] site; Zn-N(His) bond ~2.0-2.2 A. 2.6 A cutoff (matches the
@@ -133,26 +137,34 @@ def mixed_chirality_fasta(seq_one_letter: str, fixed_chirality: dict) -> str:
 # ── Zn-ligand FASTA emission (the metal/HETATM context) ─────────────────────────
 
 def build_cyclic_input_fasta(binder_mixed_seq: str, binder_name: str = "binder",
-                             zn_name: str = "zn") -> str:
-    """Build the full Chai input FASTA: the mixed-chirality peptide + the Zn SMILES ligand.
+                             zn_name: str = "zn", zn_ccd: str | None = ZN_CCD) -> str:
+    """Build the full Chai input FASTA: the mixed-chirality peptide + the Zn ligand.
 
-    io_spec.build_fasta ONLY emits protein chains (it has no ligand path), so the Zn metal
-    context is appended HERE as a chai `>ligand|name=...` SMILES entity. The protein chain is
-    written FIRST so Chai labels the peptide chain A and the Zn ligand chain B — matching the
-    case's metal_coordination restraint (his_chain='A', metal_chain='B').
+    io_spec.build_fasta ONLY emits protein chains, so the Zn metal context is appended HERE. The
+    protein chain is written FIRST so Chai labels the peptide chain A and the Zn ligand chain B —
+    matching the case's metal_coordination restraint (his_chain='A', metal_chain='B').
+
+    METAL-(b): by DEFAULT (``zn_ccd='ZN'``) the metal is emitted as a CCD residue
+    (`>ligand|name=ZN` + the code 'ZN' on the sequence line) so chai tokenizes a resolvable
+    residue+atom (residue ZN, atom ZN) — required for atom-aware coordination. Pass
+    ``zn_ccd=None`` to fall back to the SMILES form (`>ligand|name=<zn_name>` + the bare-cation
+    SMILES), kept for non-CCD metals.
 
     Args:
         binder_mixed_seq: the peptide's mixed-chirality Chai sequence (from mixed_chirality_fasta).
         binder_name: name for the protein entity header.
-        zn_name: name for the Zn ligand entity header.
+        zn_name: name for the Zn ligand entity header (SMILES fallback only).
+        zn_ccd: CCD code for the metal (default 'ZN'); None -> SMILES fallback.
 
     Returns:
         A Chai FASTA string (trailing newline) with two entities: protein then ligand.
     """
-    return (
-        f">protein|{binder_name}\n{binder_mixed_seq}\n"
-        f">ligand|name={zn_name}\n{ZN_SMILES}\n"
-    )
+    if zn_ccd:
+        code = str(zn_ccd).upper()
+        zn_line = f">ligand|name={code}\n{code}\n"
+    else:
+        zn_line = f">ligand|name={zn_name}\n{ZN_SMILES}\n"
+    return f">protein|{binder_name}\n{binder_mixed_seq}\n" + zn_line
 
 
 # ── Metal-coordination restraint wiring (His<->Zn, via build_for_case) ──────────

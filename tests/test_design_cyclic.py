@@ -206,6 +206,8 @@ def test_ensure_canonical_anchor_no_forced_gly_when_backbone_mixed():
 # ── Zn-ligand FASTA emission (the metal/HETATM context) ─────────────────────────
 
 def test_build_cyclic_input_fasta_has_protein_and_zn_ligand():
+    # METAL-(b): by default the metal is fed as a CCD residue (`>ligand|name=ZN` + 'ZN'), the form
+    # chai_patches._patch_ligand_ccd_feeding recognizes (resolvable residue ZN, atom ZN).
     fasta = build_cyclic_input_fasta(
         binder_mixed_seq="H(DHI)H(DHI)", binder_name="binder", zn_name="zn"
     )
@@ -213,12 +215,22 @@ def test_build_cyclic_input_fasta_has_protein_and_zn_ligand():
     # protein chain first (so chai labels it chain A), Zn ligand second (chain B).
     assert lines[0] == ">protein|binder"
     assert lines[1] == "H(DHI)H(DHI)"
+    assert lines[2] == ">ligand|name=ZN"
+    assert lines[3] == "ZN"        # the CCD code on the sequence line (cached-conformer path)
+
+
+def test_build_cyclic_input_fasta_smiles_fallback():
+    # zn_ccd=None falls back to the SMILES form, kept for non-CCD metals.
+    fasta = build_cyclic_input_fasta(
+        binder_mixed_seq="H(DHI)", binder_name="binder", zn_name="zn", zn_ccd=None
+    )
+    lines = fasta.strip().splitlines()
     assert lines[2] == ">ligand|name=zn"
     assert lines[3] == ZN_SMILES  # the zinc SMILES, e.g. '[Zn+2]'
 
 
 def test_zn_smiles_is_zinc_ion():
-    # The cofactor enters Chai as a SMILES ligand; zinc(II) is '[Zn+2]'.
+    # The bare metal-cation SMILES, kept for the SMILES fallback path; zinc(II) is '[Zn+2]'.
     assert ZN_SMILES == "[Zn+2]"
 
 

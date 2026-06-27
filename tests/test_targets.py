@@ -46,6 +46,42 @@ def test_metal_emits_ligand_and_gate(monkeypatch):
     assert hint == "metal_coordination"
 
 
+def test_metal_feeds_ccd_residue_by_default(monkeypatch):
+    """METAL-(b) STEP 1: the metal enters as a CCD residue (metal_ccd='ZN'), NOT SMILES — the
+    cyclic preset's default '[Zn+2]' SMILES maps to the CCD code ZN so chai tokenizes a resolvable
+    residue+atom for atom-aware coordination."""
+    c = resolve_config("cyclic", target_type="metal")     # preset smiles '[Zn+2]'
+    monkeypatch.setattr(targets, "_metal_patch_verified", lambda: True)
+    ents, _md, hint = targets.target_entities(c)
+    lig = next(e for e in ents if e["type"] == "ligand")
+    assert lig.get("metal_ccd") == "ZN"
+    assert "smiles" not in lig
+    assert hint == "metal_coordination"
+
+
+def test_metal_explicit_ccd_code_used(monkeypatch):
+    """An explicit CCD metal code (target.ccd='FE') is fed as that CCD residue."""
+    c = resolve_config("cyclic", target_type="metal")
+    c.target.smiles = ""
+    c.target.ccd = "FE"
+    monkeypatch.setattr(targets, "_metal_patch_verified", lambda: True)
+    ents, _md, _hint = targets.target_entities(c)
+    lig = next(e for e in ents if e["type"] == "ligand")
+    assert lig.get("metal_ccd") == "FE"
+
+
+def test_metal_non_ccd_smiles_falls_back_to_smiles(monkeypatch):
+    """A non-CCD metal/SMILES (an arbitrary SMILES with no CCD mapping) keeps the SMILES path."""
+    c = resolve_config("cyclic", target_type="metal")
+    c.target.smiles = "[Pt+2]"        # no CCD mapping in our metal table -> SMILES fallback
+    c.target.ccd = ""
+    monkeypatch.setattr(targets, "_metal_patch_verified", lambda: True)
+    ents, _md, _hint = targets.target_entities(c)
+    lig = next(e for e in ents if e["type"] == "ligand")
+    assert lig.get("smiles") == "[Pt+2]"
+    assert "metal_ccd" not in lig
+
+
 def test_alpha_empty_fasta_falls_back_to_case_default(monkeypatch):
     """T10 fix 1: alpha with no explicit FASTA resolves the case default target record
     (alpha._TARGET_RECORD) instead of reading Path('') (IsADirectoryError)."""

@@ -80,13 +80,24 @@ def build_fasta(entities: Sequence[Mapping[str, object]]) -> str:
         if etype == "ligand":
             smiles = e.get("smiles")
             ccd = e.get("ccd")
-            if smiles:
+            metal_ccd = e.get("metal_ccd")
+            if metal_ccd:
+                # METAL-(b): emit the metal as `>ligand|name=<CODE>` with the CCD code on the
+                # sequence line — the form chai_patches._patch_ligand_ccd_feeding recognizes
+                # (both the entity name AND the sequence are the CCD code), so the metal tokenizes
+                # via the cached conformer (residue=<CODE>, atom=<CODE>) and atom-aware coordination
+                # restraints resolve. Falls back to SMILES below when no CCD code is requested.
+                code = str(metal_ccd).upper()
+                lines.append(f">ligand|name={code}")
+                lines.append(code)
+            elif smiles:
                 lines.append(f">ligand|name={name}")
                 lines.append(str(smiles))
             elif ccd:
                 lines.append(f">ligand|ccd={ccd}")
             else:
-                raise ValueError(f"ligand entity {name!r} needs a 'smiles' or 'ccd' value")
+                raise ValueError(
+                    f"ligand entity {name!r} needs a 'smiles', 'ccd', or 'metal_ccd' value")
             continue
         seq = e["sequence"]
         chirality = str(e.get("chirality", "L")).upper()

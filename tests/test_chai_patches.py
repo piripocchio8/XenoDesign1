@@ -150,6 +150,56 @@ def _install_fake_residue_constants(monkeypatch):
     monkeypatch.setattr(sys.modules["chai_lab.data"], "residue_constants", rc, raising=False)
 
 
+# ── METAL-(b) STEP 1: feed metals as CCD residues, not SMILES ligands ───────────
+#
+# WHY current fails: a metal entered as SMILES '[Zn+2]' becomes chai token residue name 'LIG',
+# atom 'ZN1'; an atom-aware coordination restraint that references the metal's 'ZN' atom never
+# resolves. BUT chai's conformer cache already holds metals as CCD residues (ZN -> atom ZN). If
+# we feed the metal as a CCD Residue(name='ZN', smiles=None) the tokenizer hits the cached-conformer
+# path and the atom 'ZN' is resolvable. The DECISION ("is this entity name a known CCD code?") is
+# the only CPU-testable part — exercised here against a FAKE conformer cache, not real chai.
+
+def test_is_ccd_ligand_code_true_for_cached_metal():
+    """A ligand whose code IS present in the conformer cache -> CCD path (True)."""
+    from xenodesign.chai_patches import _is_ccd_ligand_code
+    cache = {"ZN", "FE", "CU", "NI", "MG", "MN", "CO"}
+    fake_get = lambda name: object() if name in cache else None
+    assert _is_ccd_ligand_code("ZN", conformer_get=fake_get) is True
+    assert _is_ccd_ligand_code("FE", conformer_get=fake_get) is True
+
+
+def test_is_ccd_ligand_code_false_for_smiles_and_unknown():
+    """A real SMILES string (not a CCD code) and an unknown code -> SMILES path (False)."""
+    from xenodesign.chai_patches import _is_ccd_ligand_code
+    cache = {"ZN"}
+    fake_get = lambda name: object() if name in cache else None
+    assert _is_ccd_ligand_code("[Zn+2]", conformer_get=fake_get) is False
+    assert _is_ccd_ligand_code("CC(=O)O", conformer_get=fake_get) is False  # acetic acid SMILES
+    assert _is_ccd_ligand_code("BOGUS", conformer_get=fake_get) is False
+    assert _is_ccd_ligand_code("", conformer_get=fake_get) is False
+    assert _is_ccd_ligand_code(None, conformer_get=fake_get) is False
+
+
+def test_is_ccd_ligand_code_case_insensitive_lookup():
+    """The cache keys CCD codes uppercase; a lowercase 'zn' entity name still resolves."""
+    from xenodesign.chai_patches import _is_ccd_ligand_code
+    fake_get = lambda name: object() if name == "ZN" else None
+    assert _is_ccd_ligand_code("zn", conformer_get=fake_get) is True
+
+
+def test_ccd_decision_picks_ccd_residue_over_smiles():
+    """The shared per-input decision: a CCD-coded ligand input yields a CCD residue spec
+    (name=<CODE>, smiles=None); a genuine SMILES ligand input keeps the SMILES spec."""
+    from xenodesign.chai_patches import _ccd_residue_spec_for_ligand
+    fake_get = lambda name: object() if name == "ZN" else None
+    # CCD-coded ligand (entity_name == sequence == 'ZN'): build a CCD residue.
+    spec = _ccd_residue_spec_for_ligand(entity_name="zn", sequence="ZN", conformer_get=fake_get)
+    assert spec == {"name": "ZN", "smiles": None}
+    # genuine SMILES ligand: no CCD residue -> None (caller falls back to SMILES path).
+    assert _ccd_residue_spec_for_ligand(entity_name="lig", sequence="[Zn+2]",
+                                        conformer_get=fake_get) is None
+
+
 def test_covalent_name_candidates_accepts_d_synonym(monkeypatch):
     """A COVALENT row's one-letter code must match BOTH the L 3-letter name AND its D-CCD form,
     so chai stops dropping D-Cys disulfides / head-to-tail D closures at the name guard."""

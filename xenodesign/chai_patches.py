@@ -304,6 +304,112 @@ def _patch_covalent_bond_match() -> None:  # pragma: no cover (gpu import)
           "(L name OR L_TO_D[L]).", flush=True)
 
 
+# ── METAL-(b) STEP 1: CCD metal feeding (real atom-specific coordination) ───────
+#
+# A metal fed as SMILES '[Zn+2]' tokenizes to residue name 'LIG', atom 'ZN1' — neither of which a
+# coordination restraint that names the metal atom 'ZN' can resolve. chai's conformer cache already
+# holds metals (and many cofactors) as CCD residues whose code IS the residue name and whose atom is
+# the bare element (ZN -> atom ZN). Feeding the metal as a CCD Residue(name='ZN', smiles=None) takes
+# the tokenizer's cached-conformer path (_get_ref_conformer_data branch 1), giving a resolvable
+# residue+atom. We detect "this ligand entity is a known CCD code" via the conformer cache and, when
+# so, build a CCD residue instead of a SMILES ligand. Anything not in the cache (a real SMILES) keeps
+# the SMILES path. Decision logic is pure + CPU-tested (test_chai_patches); the monkeypatch wiring is
+# gpu-only (needs the real chai tokenizer / cache).
+
+
+def _is_ccd_ligand_code(name, conformer_get) -> bool:
+    """True iff ``name`` is a CCD residue code present in chai's conformer cache.
+
+    Pure decision shared by the CCD-feeding patch and its CPU unit test. ``conformer_get`` is a
+    callable ``code -> ConformerData | None`` (the real ``RefConformerGenerator.get``; a fake in
+    tests). A real SMILES string (e.g. '[Zn+2]', 'CC(=O)O') is never a CCD code, so it returns
+    False and the caller keeps the SMILES path. The CCD cache keys codes UPPERCASE, so the lookup
+    is case-insensitive (a lowercase entity name 'zn' still resolves to 'ZN'). Empty/None -> False.
+    """
+    if not name:
+        return False
+    return conformer_get(str(name).upper()) is not None
+
+
+def _ccd_residue_spec_for_ligand(entity_name, sequence, conformer_get) -> dict | None:
+    """Return ``{'name': <CODE>, 'smiles': None}`` when a ligand input is a known CCD code, else None.
+
+    A ligand is fed CCD-style when EITHER its sequence line OR its entity name is a CCD code in the
+    conformer cache (io_spec emits ``>ligand|name=ZN`` with the sequence line also ``ZN``). The
+    sequence is checked first (it is the SMILES slot for genuine SMILES ligands; a CCD code there is
+    unambiguous), then the entity name. Returns None for a genuine SMILES ligand so the caller falls
+    back to the stock SMILES path. The returned name is UPPERCASED to the canonical CCD code."""
+    for candidate in (sequence, entity_name):
+        if _is_ccd_ligand_code(candidate, conformer_get):
+            return {"name": str(candidate).upper(), "smiles": None}
+    return None
+
+
+def _patch_ligand_ccd_feeding() -> None:  # pragma: no cover (gpu import)
+    """Build a CCD-coded ligand as a cached-conformer CCD residue instead of a SMILES ligand.
+
+    Idempotent. Wraps ``inference_dataset.raw_inputs_to_entitites_data`` so that, for each LIGAND
+    input whose code resolves in the conformer cache (:func:`_ccd_residue_spec_for_ligand`), the
+    input's ``sequence`` is rewritten to the CCD code AND a one-off tokenizer-friendly CCD residue
+    is produced via the cached-conformer path (Residue(name=<CODE>, smiles=None)). The simplest safe
+    interception: monkeypatch ``get_lig_residues`` is NOT enough (it has no access to the entity
+    name), so we instead wrap the top-level function and post-process LIGAND entities whose single
+    residue should be a CCD residue. Non-CCD ligands (real SMILES) are untouched.
+
+    The decision logic is unit-tested on CPU against a fake cache; this wiring is GPU-validated by
+    Marco (needs the real conformer cache + tokenizer)."""
+    import chai_lab.data.dataset.inference_dataset as ID
+    from chai_lab.data.parsing.structure.entity_type import EntityType
+    from chai_lab.data.parsing.structure.residue import Residue, get_restype
+    from chai_lab.data.residue_constants import residue_types_with_nucleotides_order
+    from chai_lab.data.sources.rdkit import RefConformerGenerator
+
+    if getattr(ID, "_xeno_ccd_ligand_feeding", False):
+        return
+
+    orig = ID.raw_inputs_to_entitites_data
+    # One shared generator for the cache lookup (cheap; reused across calls).
+    _gen = {"g": None}
+
+    def _conformer_get(code):
+        if _gen["g"] is None:
+            _gen["g"] = RefConformerGenerator()
+        return _gen["g"].get(code)
+
+    def _ccd_lig_residues(code):
+        """A single CCD ligand residue taking the cached-conformer tokenizer path."""
+        return [Residue(
+            name=code, label_seq=0,
+            restype=residue_types_with_nucleotides_order.get("X", 0),
+            residue_index=0, is_missing=False, b_factor_or_plddt=0.0,
+            conformer_data=None, smiles=None,
+        )]
+
+    def raw_inputs_to_entitites_data(inputs, *args, **kwargs):
+        # Rewrite any CCD-coded ligand input's sequence to its CCD code so the stock entity-id
+        # bookkeeping (which keys ligands by their sequence) stays coherent, then let the original
+        # build everything; finally swap the SMILES residue for a CCD residue on those entities.
+        ccd_codes: dict[int, str] = {}
+        for i, inp in enumerate(inputs):
+            if inp.entity_type == EntityType.LIGAND.value:
+                spec = _ccd_residue_spec_for_ligand(inp.entity_name, inp.sequence,
+                                                    _conformer_get)
+                if spec is not None:
+                    ccd_codes[i] = spec["name"]
+        entities = orig(inputs, *args, **kwargs)
+        for i, code in ccd_codes.items():
+            entities[i].residues[:] = _ccd_lig_residues(code)
+            entities[i].full_sequence[:] = [code]
+            print(f"[patch] ligand {entities[i].entity_name!r} fed as CCD residue "
+                  f"{code!r} (cached conformer; atom-resolvable).", flush=True)
+        return entities
+
+    ID.raw_inputs_to_entitites_data = raw_inputs_to_entitites_data
+    ID._xeno_ccd_ligand_feeding = True
+    print("[patch] ligand CCD feeding installed (CCD-coded ligands -> cached-conformer residue).",
+          flush=True)
+
+
 def ensure_patches() -> None:  # pragma: no cover (gpu import)
     """Idempotently install the chai restraint patches needed by the design/restraint paths.
 
@@ -311,7 +417,9 @@ def ensure_patches() -> None:  # pragma: no cover (gpu import)
     (2) the CONTACT/COVALENT token-dist residue-match repair (:func:`_patch_dist_restraint_match`,
     which also flips :func:`dist_restraint_patch_verified` so the ``metal`` target gate opens), and
     (3) the COVALENT bond-creation D-residue name match (:func:`_patch_covalent_bond_match`, which
-    unblocks D-Cys disulfides + head-to-tail macrocyclization).
+    unblocks D-Cys disulfides + head-to-tail macrocyclization), and (4) CCD metal feeding
+    (:func:`_patch_ligand_ccd_feeding`, so a metal entered as a CCD code tokenizes to a resolvable
+    residue+atom for atom-aware coordination).
 
     Single entry point shared by ``xenodesign.dispatch.run_design`` (so cyclic's metal coordination
     restraint actually applies through the unified ``scripts/design.py`` path) and by
@@ -320,3 +428,4 @@ def ensure_patches() -> None:  # pragma: no cover (gpu import)
     _patch_pocket_name_check()
     _patch_dist_restraint_match()
     _patch_covalent_bond_match()
+    _patch_ligand_ccd_feeding()
