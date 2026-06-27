@@ -52,6 +52,7 @@ def carbonara_design_fn(
     fixed_mask: Sequence[bool],
     temperature: float = 0.1,
     num_seqs: int = 1,
+    known_seq: "str | None" = None,
 ) -> List[str]:
     """CARBonAra inverse-folding backend (InverseFoldingBackend protocol).
 
@@ -62,10 +63,13 @@ def carbonara_design_fn(
         design_backbone: np.ndarray (n_res, 4, 3) — N, CA, C, CB in L-frame.
         context_coords: np.ndarray (n_ctx, 3) — partner atoms (may be empty).
         context_elements: list[str] — element symbols of the context atoms (may be empty).
-        fixed_mask: list[bool] — True = keep this design position fixed (output 'A' placeholder).
+        fixed_mask: list[bool] — True = keep this design position fixed; its identity is restored
+            from `known_seq` (B2) instead of the old 'A' placeholder.
         temperature: float — mapped to sampling_method='sampled' + a fixed imprint_ratio (no
             CARBonAra temperature exists). Held constant; forwarded only for parity/logging.
         num_seqs: int — number of candidate sequences to sample and return.
+        known_seq: str | None — the REAL L-projected design-chain sequence (one-letter, len n_res).
+            At fixed positions the candidate is set to this identity (not 'A'); None -> 'A' (legacy).
 
     Returns:
         list[str] of length num_seqs — designed-chain one-letter L sequences (the DESIGNED chain
@@ -102,11 +106,11 @@ def carbonara_design_fn(
         # discarded. _run_carbonara already split on ':', so pair[0] is the design chain.
         design_seq = pair[0]
         letters = list(design_seq)
-        # Re-apply fixed positions to a deterministic placeholder ('A'), exactly like
-        # sequence_update.py:412-414 (the model may have changed them; we pin them).
+        # B2: re-impose fixed positions from the REAL `known_seq` identity (not an 'A' placeholder),
+        # so pinned coordinators keep their declared residue. Falls back to 'A' when no known_seq.
         for i, fixed in enumerate(fixed_mask):
             if fixed and i < len(letters):
-                letters[i] = "A"
+                letters[i] = (known_seq[i] if (known_seq and i < len(known_seq)) else "A")
         one = "".join(letters)
         if len(one) != n_res:
             raise ValueError(

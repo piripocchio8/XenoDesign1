@@ -49,7 +49,6 @@ from xenodesign.classes._alpha_internals import (  # noqa: F401
     _best_cif_path,
     _binder_helix_fraction,
     _chirality_violation_frac_from_cif,
-    _coordinator_anchor,
     _cterm_gly_anchor,
     _ensure_cterm_glycine,
     _ligandmpnn_design_fn,

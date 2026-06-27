@@ -330,7 +330,12 @@ class Cyclic:
         never overwriting a declared coordinator. ``fixed`` keys are the 1-based coordinator
         positions; non-coordinator handedness is read from ``chirality_map`` (positions absent
         default to ``default_chirality`` — the cyclic backbone is encoded uniformly all-D in the
-        no-target path, L in the mixed-metal path)."""
+        no-target path, L in the mixed-metal path).
+
+        B6: coordinator positions are EXCLUDED from both the trigger scan and the anchor placement,
+        so a declared coordinator (even at the C-terminus) is NEVER overwritten by the Gly anchor;
+        and when the metal path's non-coordinator backbone is genuinely mixed L/D (an L is present),
+        the 'no L present' trigger does not fire — the chain is already tokenizable."""
         if "G" in one_letter:
             return one_letter
         n = len(one_letter)
@@ -342,7 +347,8 @@ class Cyclic:
         # residues, so no forced Gly is needed.
         if "D" in hands and "L" in hands:
             return one_letter
-        # All-one-handedness: place the achiral anchor at the C-TERMINAL non-coordinator position.
+        # All-one-handedness: place the achiral anchor at the C-TERMINAL NON-coordinator position
+        # (never a declared coordinator — B6).
         if non_coord:
             i = non_coord[-1]
             return one_letter[:i] + "G" + one_letter[i + 1:]
