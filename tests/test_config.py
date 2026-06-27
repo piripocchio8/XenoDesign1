@@ -75,6 +75,37 @@ def test_resolve_unknown_binder_class_lists_keys():
     assert "alpha" in str(ei.value) and "non_alpha" in str(ei.value)
 
 
+def test_mixed_chirality_default_none_for_homochiral():
+    # alpha / non_alpha default to homochiral greedy/beam: mixed_chirality stays "none".
+    assert resolve_config("alpha", target_type="protein").mixed_chirality == "none"
+    assert resolve_config("non_alpha", target_type="protein").mixed_chirality == "none"
+
+
+def test_cyclic_preset_defaults_mixed_chirality_A():
+    # cyclic is mixed-chirality by definition -> default Variant A, for EVERY target chemistry.
+    assert PRESETS["cyclic"].mixed_chirality == "A"
+    assert resolve_config("cyclic", target_type="metal").mixed_chirality == "A"
+    assert resolve_config("cyclic", target_type="none").mixed_chirality == "A"
+
+
+def test_mixed_chirality_validates_allowed_values():
+    cfg = resolve_config("cyclic", target_type="none",
+                         cli_overrides={"mixed_chirality": "B"})
+    assert cfg.mixed_chirality == "B"
+    with pytest.raises(ValueError, match="mixed_chirality"):
+        resolve_config("cyclic", target_type="none",
+                       cli_overrides={"mixed_chirality": "bogus"})
+
+
+def test_loop_search_still_greedy_default_choices_unchanged():
+    # The launcher axis is untouched: greedy default, beam still allowed.
+    cfg = resolve_config("alpha", target_type="protein")
+    assert cfg.loop.search == "greedy"
+    cfg2 = resolve_config("alpha", target_type="protein",
+                          cli_overrides={"loop.search": "beam"})
+    assert cfg2.loop.search == "beam"
+
+
 def test_dump_config_roundtrips(tmp_path):
     cfg = resolve_config("alpha", target_type="protein", out_dir=str(tmp_path))
     p = dump_config(cfg, tmp_path)

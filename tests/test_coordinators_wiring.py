@@ -50,13 +50,18 @@ def test_declared_coordinators_generalize_beyond_his():
     assert spec.fixed_chirality == {4: "D", 9: "L", 15: "D"}
 
 
-def test_declared_coordinators_opt_in_off_when_restraints_off():
+def test_declared_coordinators_seed_even_when_restraints_off():
+    """OPT-IN restraints (Marco 2026-06-27): EXPLICIT --coord_residues still drive SEED placement
+    when restraints are OFF, so an UNGUIDED --no_restraints metal run still places the declared
+    donors (with their declared L/D). Only the RESTRAINT emission is gated by the toggle; the
+    case-His DEFAULT scaffold (no explicit coords) remains opt-in (see _no_default_his test)."""
     c = Cyclic()
     coords = _coords("H6,DHI12")
     cfg = _cyclic_cfg(restraints_on=False,
                       **{"restraint.params": {"coord_residues": coords}})
     spec = c.seed(cfg, target_seq=None)
-    assert spec.fixed_chirality == {}
+    assert spec.one_letter[5] == "H" and spec.one_letter[11] == "H"
+    assert spec.fixed_chirality == {6: "L", 12: "D"}
 
 
 # ── restraints: rows reference the declared coordinators (and their identities) ────
@@ -69,10 +74,12 @@ def test_declared_coordinators_drive_restraint_rows(tmp_path):
     path = c.restraints(cfg, get_case("cyclic"), tmp_path, target_ctx=None)
     rows = parse_restraints(path)
     # One contact per declared coordinator, at the declared positions, with REAL identities.
-    assert len(rows) == 3
-    coord_tokens = sorted(r["res_idxA"] for r in rows)
+    contacts = [r for r in rows if r["connection_type"] == "contact"]
+    assert len(contacts) == 3
+    coord_tokens = sorted(r["res_idxA"] for r in contacts)
     assert coord_tokens == ["C18", "H12", "H6"]
-    assert all(r["connection_type"] == "contact" for r in rows)
+    # WT-RESTRAINTS: the cyclic closure now rides along by default (auto-closure).
+    assert any(r["restraint_id"] == "head_to_tail" for r in rows)
 
 
 def test_metal_rows_declarative_overrides_his_resnums():
@@ -89,17 +96,53 @@ def test_metal_rows_declarative_overrides_his_resnums():
 
 # ── default fall-back: cyclic still works with case defaults when flag absent ──────
 
-def test_cyclic_defaults_unchanged_when_coord_residues_absent(tmp_path):
+def test_cyclic_seed_defaults_unchanged_when_coord_residues_absent(tmp_path):
+    """The SEED still falls back to the case His defaults when --coord_residues is absent
+    (the require-coord rule below is enforced only at restraint-emission time for a metal target)."""
     c = Cyclic()
     cfg = _cyclic_cfg(out_dir=str(tmp_path))
     spec = c.seed(cfg, target_seq=None)
     # Case-default His-only coordinators (6/12/18/24, L/D/L/D) — unchanged behaviour.
     assert spec.fixed_chirality == {6: "L", 12: "D", 18: "L", 24: "D"}
     assert len(spec.one_letter) == resolve_binder_length(cfg) == 24
-    path = c.restraints(cfg, get_case("cyclic"), tmp_path, target_ctx=None)
-    rows = parse_restraints(path)
-    assert [r["res_idxA"] for r in rows] == ["H6", "H12", "H18", "H24"]
-    assert all(r["comment"] == "His-Zn" for r in rows)
+
+
+def test_cyclic_metal_restraints_require_coord_residues(tmp_path):
+    """WT-RESTRAINTS #4: a metal cyclic restraint emission with NO declared --coord_residues now
+    raises (the liganding chemistry must be declared, not silently defaulted to the case His)."""
+    import pytest
+    c = Cyclic()
+    cfg = _cyclic_cfg(out_dir=str(tmp_path))
+    with pytest.raises(ValueError) as ei:
+        c.restraints(cfg, get_case("cyclic"), tmp_path, target_ctx=None)
+    assert "coord_residues" in str(ei.value)
+
+
+# ── seq-update: coordinators threaded so post-design identity/chirality is re-imposed ──
+
+def test_cyclic_seq_update_passes_coordinators_and_frozen(monkeypatch):
+    """Cyclic.seq_update must thread the declared coordinators (0-based pos, one_letter) into
+    make_alpha_seq_update_fn so the post-design anchor can re-impose the pinned His identity
+    (GPU-confirmed bug: fixed_mask alone blanked them to D-Ala). frozen_positions stays too."""
+    import xenodesign.classes.alpha as alpha_mod
+
+    captured = {}
+
+    def fake_make(wrapper, **kw):
+        captured.update(kw)
+        return lambda prediction: "stub"
+
+    monkeypatch.setattr(alpha_mod, "make_alpha_seq_update_fn", fake_make)
+
+    c = Cyclic()
+    coords = _coords("H6,DHI12,H18,DHI24")
+    cfg = _cyclic_cfg(**{"restraint.params": {"coord_residues": coords}})
+    c.seq_update(cfg, wrapper=object(), seed_spec=None, roles=None)
+
+    # coordinators: 0-based position + one-letter identity.
+    assert captured["coordinators"] == [(5, "H"), (11, "H"), (17, "H"), (23, "H")]
+    # frozen_positions kept (both mark the positions non-designable; harmless overlap).
+    assert captured["frozen_positions"] == {5, 11, 17, 23}
 
 
 # ── CLI flag plumbing (scripts/design.py) ──────────────────────────────────────────
@@ -131,8 +174,10 @@ def test_cli_coord_residues_parsed_into_params():
     cfg = resolve_config("cyclic", target_type="metal",
                          cli_overrides={"use_pepmlm": False})
     _apply_declarative_flags(cfg, a)
+    # Stored tuple widened to (pos, one_letter, three_letter, chirality, atom) — atom last
+    # for back-compat (omitted @atom defaults per element: His -> ND1).
     assert cfg.restraint.params["coord_residues"] == [
-        (6, "H", "HIS", "L"), (12, "H", "DHI", "D")]
+        (6, "H", "HIS", "L", "ND1"), (12, "H", "DHI", "D", "ND1")]
 
 
 def test_cli_flags_absent_leave_params_untouched():

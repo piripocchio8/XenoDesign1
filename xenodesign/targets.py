@@ -121,6 +121,36 @@ def _metal_patch_verified() -> bool:
     return dist_restraint_patch_verified()
 
 
+# METAL-(b): bare-metal-cation SMILES -> CCD residue code. A metal fed as a CCD residue tokenizes
+# to a resolvable residue+atom (e.g. ZN -> atom ZN) for atom-aware coordination, whereas the SMILES
+# form gives residue 'LIG' / atom 'ZN1' (unresolvable). Codes match chai's conformer cache.
+_METAL_SMILES_TO_CCD = {
+    "[ZN+2]": "ZN", "[FE+2]": "FE", "[FE+3]": "FE", "[CU+2]": "CU", "[CU+]": "CU",
+    "[NI+2]": "NI", "[MN+2]": "MN", "[CO+2]": "CO", "[MG+2]": "MG", "[CA+2]": "CA",
+}
+
+
+def _metal_ligand_entity(target):
+    """Build the metal ligand entity dict for the ``metal`` target (METAL-(b)).
+
+    Prefers a CCD residue (``metal_ccd``) so the metal tokenizes to a resolvable residue+atom:
+      * an explicit ``target.ccd`` is used verbatim as the CCD code;
+      * else a recognised bare-metal-cation ``target.smiles`` (e.g. '[Zn+2]') maps to its CCD code.
+    Falls back to the SMILES path only for a non-CCD metal/SMILES (no mapping, no ccd)."""
+    lig = {"type": "ligand", "name": "zn"}
+    if target.ccd:
+        lig["metal_ccd"] = str(target.ccd).upper()
+        return lig
+    code = _METAL_SMILES_TO_CCD.get(str(target.smiles).upper().strip())
+    if code:
+        lig["metal_ccd"] = code
+        return lig
+    # Non-CCD metal / arbitrary SMILES: keep the SMILES path (still a valid ligand, just not
+    # atom-resolvable for coordination — documented fallback).
+    lig["smiles"] = target.smiles
+    return lig
+
+
 def target_entities(cfg):
     """Return (entities, msa_dir, restraint_hint) for the FIXED context (binder added later)."""
     t = cfg.target
@@ -163,12 +193,13 @@ def target_entities(cfg):
         lig["smiles" if t.smiles else "ccd"] = t.smiles or t.ccd
         return [lig], None, None
     if t.target_type == "metal":
-        if not _metal_patch_verified():
+        # The dist-restraint patch is only needed when coordination restraints are actually emitted.
+        # An UNGUIDED metal run (--no_restraints => restraints_on=False) applies no coordination
+        # restraints, so the patch gate is irrelevant — skip it and let Chai hallucinate freely.
+        if cfg.restraints_on and not _metal_patch_verified():
             raise RuntimeError(
                 "metal target_type requires the token_dist_restraint patch "
                 "(chai_patches._patch_dist_restraint_match) verified-applied on the metal probe; "
                 "coordinator D/non-canonical residue match currently drops the restraint.")
-        lig = {"type": "ligand", "name": "zn"}
-        lig["smiles" if t.smiles else "ccd"] = t.smiles or t.ccd
-        return [lig], None, "metal_coordination"
+        return [_metal_ligand_entity(t)], None, "metal_coordination"
     raise ValueError(f"unknown target_type {t.target_type!r}")

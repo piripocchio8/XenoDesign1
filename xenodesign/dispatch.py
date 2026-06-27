@@ -105,6 +105,31 @@ def _seed_to_seq_update(cls, cfg, wrapper, seed_spec, roles=None):
     return fn(cfg, wrapper, seed_spec)
 
 
+def _seed_d_fasta(seed_spec) -> str:
+    """Encode the seed one-letter as the loop's iter_000 D-CCD input, honouring per-position L/D.
+
+    Default (no 'L' pinned in ``seed_spec.fixed_chirality`` — the alpha/non_alpha all-D case):
+    whole-chain ``to_d_fasta`` (byte-for-byte unchanged). When the seed declares ANY L position
+    (e.g. cyclic metal coordinators His6/His18), encode per-position via ``mixed_chirality_fasta``
+    so the L coordinators stay bare canonical and every other position is D-CCD — preventing the
+    all-D override from flipping declared-L donors to D on the first iteration.
+
+    ``fixed_chirality`` keys are 1-based; positions absent default to D (the cyclic all-D backbone),
+    matching the seq-update extractor's per-position default."""
+    from xenodesign.io_spec import to_d_fasta
+
+    one = seed_spec.one_letter
+    fixed = dict(getattr(seed_spec, "fixed_chirality", {}) or {})
+    if "L" not in fixed.values():
+        return to_d_fasta(one)  # pure all-D seed — unchanged
+    import xenodesign.classes.base  # noqa: F401  (prime the base<->cyclic import cycle)
+    from xenodesign.classes.cyclic import mixed_chirality_fasta
+
+    # Default every unpinned position to D so the backbone stays all-D except declared L donors.
+    pattern = {i + 1: fixed.get(i + 1, "D") for i in range(len(one))}
+    return mixed_chirality_fasta(one, fixed_chirality=pattern)
+
+
 def _call_referee(cls, cfg, loop_dir, esm_judge, roles):
     """Call the class's referee hook, threading the chain contract ``roles`` only when the hook
     accepts it (so a 3-arg mock referee in the unit tests still works). The referee reads the
@@ -150,7 +175,7 @@ def _run_beam(cls, cfg, loop, init, loop_dir, roles=None):  # pragma: no cover (
     from xenodesign.scorer import sequence_quality_key
     from xenodesign.sequence_update import _ligandmpnn_design_fn
 
-    from scripts.design_alpha import _cterm_gly_anchor, _ensure_cterm_glycine
+    from xenodesign.classes.alpha import _cterm_gly_anchor, _ensure_cterm_glycine
     from scripts.design_alpha_beam import (
         _make_anneal_referee_fn, _make_beam_referee_fn, _make_extract_fn,
     )
@@ -236,19 +261,23 @@ def run_length_sweep(cfg: DesignConfig, ladder=None) -> dict:
 
 
 def _is_mixed_chirality(cfg: DesignConfig) -> bool:
-    """The ABC search applies ONLY to mixed-chirality cases: cyclic + target_type=none (a free
-    mixed-chirality macrocycle / peptide). Homochiral classes (alpha, all-D non_alpha) keep the
-    existing greedy/beam loop."""
-    return cfg.binder_class == "cyclic" and cfg.target.target_type == "none"
+    """ABC mixed-chirality search is now selected purely by the ``--mixed_chirality`` switch
+    (``cfg.mixed_chirality in {"A","B"}``), DECOUPLED from the ``--search`` launcher and applicable
+    to ANY binder/target (cyclic+metal included). ``"none"`` keeps the greedy/beam HalluLoop."""
+    return cfg.mixed_chirality in ("A", "B")
 
 
-def _run_abc(cfg: DesignConfig, backend, seed_one_letter: str, out_dir: "Path") -> dict:
+def _run_abc(cfg: DesignConfig, backend, seed_one_letter: str, out_dir: "Path",
+             variant: str | None = None) -> dict:
     """Wire + run the ABC mixed-chirality search and assemble the result dict.
 
     Objective (decided 2026-06-25): pTM (primary) + C-N termini-distance closure proxy
     (secondary) at K*=10-25 fast Chai steps with the head-to-tail CLOSURE restraint only (NO
     target-specific coordination). Variant A: ABC searches chirality, MPNN fills identity;
     Variant B: ABC searches identity+chirality, MPNN warm-start only.
+
+    ``variant`` (``"a"``/``"b"``), when given, comes from the ``--mixed_chirality`` flag and
+    SUPERSEDES ``cfg.abc.variant``; absent, ``cfg.abc.variant`` is used (legacy / config-file).
 
     ``abc_search`` is referenced via the module global so the dispatch test can monkeypatch it.
     ``loop.py`` is never touched — this is a parallel search path, not a HalluLoop step.
@@ -261,7 +290,14 @@ def _run_abc(cfg: DesignConfig, backend, seed_one_letter: str, out_dir: "Path") 
     from xenodesign.abc.variants import abc_variant_a_design_fn, abc_variant_b_design_fn
 
     knobs = cfg.abc
+    active_variant = variant if variant is not None else knobs.variant
     rng = random.Random(cfg.seed)
+
+    # Declared coordinators (1-based) -> 0-based frozen positions. Passed into abc_search so the
+    # engine's coordinator-chirality freeze activates (track #1 gap), AND into Variant B's
+    # design_fn so pinned donors are never identity-mutated (canonical OR ncAA).
+    coord_params = (cfg.restraint.params.get("coord_residues") if cfg.restraint else None) or []
+    frozen = {int(t[0]) - 1 for t in coord_params}
 
     fitness_fn = make_abc_fitness(
         backend, k_star=knobs.fitness_steps,
@@ -269,8 +305,13 @@ def _run_abc(cfg: DesignConfig, backend, seed_one_letter: str, out_dir: "Path") 
         out_root=out_dir / "abc_evals",
     )
 
-    if knobs.variant == "b":
-        design_fn = abc_variant_b_design_fn(rng=rng, mutation_rate=knobs.chirality_move_rate)
+    if active_variant == "b":
+        # track #2: VALIDATE the configured ncAA palette (CPU-only) before handing it to the move
+        # set; an empty palette keeps ncAA OFF (existing behaviour).
+        from xenodesign.abc.ncaa import validate_palette
+        palette = validate_palette(knobs.ncaa_palette)
+        design_fn = abc_variant_b_design_fn(rng=rng, mutation_rate=knobs.chirality_move_rate,
+                                            ncaa_palette=palette, frozen=frozen)
     else:
         # Variant A: the coordinate-only LigandMPNN adapter (default SequenceUpdater backend).
         from xenodesign.sequence_update import _ligandmpnn_design_fn
@@ -284,13 +325,14 @@ def _run_abc(cfg: DesignConfig, backend, seed_one_letter: str, out_dir: "Path") 
     best, history = abc_search(
         init_pop, fitness_fn, design_fn,
         n_cycles=knobs.cycles, colony_size=knobs.colony_size,
-        scout_limit=knobs.scout_limit, chai_eval_budget=knobs.chai_eval_budget, rng=rng,
+        scout_limit=knobs.scout_limit, chai_eval_budget=knobs.chai_eval_budget,
+        frozen=frozen or None, rng=rng,
     )
 
     result = {
         "case_id": "cyclic",
         "search": "abc",
-        "abc_variant": knobs.variant,
+        "abc_variant": active_variant,
         "fitness_steps": knobs.fitness_steps,
         "selected_nectar": (float(best.nectar) if best is not None and best.nectar is not None
                             else None),
@@ -315,14 +357,12 @@ def run_design(cfg: DesignConfig) -> dict:
     real L-seed ipTM + timed wall overwrite the report's placeholder fields.
     """
     from xenodesign.benchmark.cases import get_case
-    from xenodesign.io_spec import to_d_fasta
     from xenodesign.judges.panel import JudgePanel
     from xenodesign.loop import HalluLoop, LoopState
     from xenodesign.seed import reflect_binder_in_complex_from_cif
 
-    from scripts.design_demo import (
-        _best_cif_path, _LoopBackendWrapper, _PredictBackendWrapper,
-    )
+    from xenodesign.cif_io import _best_cif_path
+    from xenodesign.backends.wrappers import _LoopBackendWrapper, _PredictBackendWrapper
 
     t0 = time.time()
     out_dir = Path(cfg.out_dir)
@@ -355,17 +395,14 @@ def run_design(cfg: DesignConfig) -> dict:
     backend, predict_fn = _make_predictor(cfg)
     adapter = _PredictAdapter(backend, predict_fn)
 
-    # ── ABC mixed-chirality search branch (--search abc) ──────────────────────────
-    # Routes mixed-chirality cases (cyclic + target_type=none) through abc_search with the fast
-    # pTM+termini fitness + the chosen variant, IN PLACE of the per-iter HalluLoop step. Homochiral
-    # classes are guarded out (greedy/beam only). ``loop.py`` is never touched.
-    if cfg.loop.search == "abc":
-        if not _is_mixed_chirality(cfg):
-            raise ValueError(
-                "--search abc is mixed-chirality only (cyclic + target_type=none); "
-                f"got binder_class={cfg.binder_class!r} target_type={cfg.target.target_type!r}. "
-                "Homochiral classes use --search greedy/beam.")
-        return _run_abc(cfg, adapter, seed_spec.one_letter, out_dir)
+    # ── ABC mixed-chirality search branch (--mixed_chirality {A,B}) ───────────────
+    # DECOUPLED from the --search launcher: when cfg.mixed_chirality is A/B, route through
+    # abc_search with the fast pTM+termini fitness + the flag-selected variant (A->a / B->b,
+    # superseding cfg.abc.variant), for ANY binder/target. mixed_chirality=none falls through to
+    # the greedy/beam HalluLoop below. ``loop.py`` is never touched.
+    if _is_mixed_chirality(cfg):
+        variant = "b" if cfg.mixed_chirality == "B" else "a"
+        return _run_abc(cfg, adapter, seed_spec.one_letter, out_dir, variant=variant)
 
     # Restraint emission (class-specific; consulted only when restraints are on).
     constraint_path = (cls.restraints(cfg, case, out_dir, (entities, msa_dir))
@@ -407,7 +444,14 @@ def run_design(cfg: DesignConfig) -> dict:
         score_fn=cls.objective(cfg, wrapper),
         refine_fn=refine_fn,
     )
-    init = LoopState(d_fasta=to_d_fasta(seed_spec.one_letter), coords=d_seed_coords)
+    # SEED chirality survival (iter_000): a plain `to_d_fasta` makes the WHOLE seed all-D, which
+    # would flip any DECLARED L coordinator (e.g. cyclic His6/His18) to D on the very first
+    # iteration — the same all-D regression the seq-update fix closes for iters >=1. When the
+    # seed carries a mixed L/D `fixed_chirality` (any position pinned 'L'), encode per-position
+    # via `mixed_chirality_fasta` so L coordinators stay bare canonical and D positions become
+    # D-CCD. Pure all-D seeds (no 'L' pinned — the alpha/non_alpha default) keep `to_d_fasta`
+    # byte-for-byte.
+    init = LoopState(d_fasta=_seed_d_fasta(seed_spec), coords=d_seed_coords)
     loop_dir = out_dir / "loop"
 
     if cfg.loop.search == "beam":

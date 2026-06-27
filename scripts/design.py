@@ -29,10 +29,25 @@ def _parse_args(argv=None):
     p.add_argument("--pdb", default=None,
                    help="optional explicit target PDB (overrides the per-class case default)")
     p.add_argument("--search", choices=("greedy", "beam", "abc"), default=None,
-                   help="'abc' = mixed-chirality ABC search (cyclic + target_type none only)")
+                   help="HalluLoop launcher: greedy (default) or beam. "
+                        "DEPRECATED: 'abc' is back-compat for --mixed_chirality A "
+                        "(B if --abc_variant b); prefer --mixed_chirality.")
+    p.add_argument("--mixed_chirality", choices=("none", "A", "B"), default=None,
+                   help="mixed-chirality ABC search OVER the loop, for ANY binder/target: "
+                        "none = homochiral greedy/beam (default for alpha/non_alpha); "
+                        "A = ABC chirality + MPNN identity (Variant a; cyclic default); "
+                        "B = ABC chirality+identity, MPNN warm-start only (Variant b)")
     p.add_argument("--abc_variant", choices=("a", "b"), default=None,
                    help="ABC axis split: 'a' = search chirality + MPNN identity (default); "
                         "'b' = search identity+chirality, MPNN warm-start only")
+    p.add_argument("--ncaa_dict", choices=("d_only", "d_common", "all"), default=None,
+                   help="ncAA palette SCOPE for the Variant-B mixed-chirality search "
+                        "(MONDE-T catalog): d_only = canonical D set only (default); "
+                        "d_common = D set + top-N MONDE-T ncAA by frequency; "
+                        "all = D set + ALL MONDE-T ncAA (no cap)")
+    p.add_argument("--ncaa_top_x", type=int, default=None,
+                   help="top-X MONDE-T ncAA (by entity_count) added for --ncaa_dict d_common "
+                        "(default 20)")
     p.add_argument("--abc_cycles", type=int, default=None, help="ABC employed/onlooker/scout cycles")
     p.add_argument("--colony_size", type=int, default=None, help="ABC colony size (food sources)")
     p.add_argument("--scout_limit", type=int, default=None,
@@ -70,10 +85,22 @@ def _overrides(a) -> dict:
     """Map the present CLI flags to dotted DesignConfig override keys (absent flags are omitted so
     the per-class PRESET / config-file value wins)."""
     o: dict = {}
-    if a.search is not None:
+    if a.search == "abc":
+        # BACK-COMPAT: the old `--search abc` launcher value is now a thin alias for the decoupled
+        # --mixed_chirality switch (A by default; B when --abc_variant b). It no longer sets
+        # loop.search (which is the greedy|beam launcher only).
+        print("NOTE: --search abc is deprecated; use --mixed_chirality {A,B}.", file=sys.stderr)
+        o["mixed_chirality"] = "B" if a.abc_variant == "b" else "A"
+    elif a.search is not None:
         o["loop.search"] = a.search
+    if a.mixed_chirality is not None:
+        o["mixed_chirality"] = a.mixed_chirality
     if a.abc_variant is not None:
         o["abc.variant"] = a.abc_variant
+    if a.ncaa_dict is not None:
+        o["ncaa_dict"] = a.ncaa_dict
+    if a.ncaa_top_x is not None:
+        o["ncaa_top_x"] = a.ncaa_top_x
     if a.abc_cycles is not None:
         o["abc.cycles"] = a.abc_cycles
     if a.colony_size is not None:
@@ -140,9 +167,10 @@ def _apply_declarative_flags(cfg, a) -> None:
     if a.coord_residues is not None:
         from xenodesign.coordinators import parse_coord_residues
         coords = parse_coord_residues(a.coord_residues)
-        # Stored as plain tuples so the resolved-config dump is JSON-clean.
+        # Stored as plain tuples so the resolved-config dump is JSON-clean. The atom is the
+        # 5th element (last) for backward compatibility — older 4-tuple consumers index 0-3.
         cfg.restraint.params["coord_residues"] = [
-            (c.pos, c.one_letter, c.three_letter, c.chirality) for c in coords]
+            (c.pos, c.one_letter, c.three_letter, c.chirality, c.atom) for c in coords]
 
 
 def main(argv=None):

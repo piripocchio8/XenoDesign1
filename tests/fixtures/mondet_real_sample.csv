@@ -1,0 +1,9 @@
+component_id,parent,entity_count,smiles
+MSE,MET,10214,C[Se]CC[C@@H](C(=O)O)N
+DAL,ALA,395,C[C@H](C(=O)O)N
+DAL,D-amino acid,395,C[C@H](C(=O)O)N
+DTR,TRP,121,c1ccc2c(c1)c(c[nH]2)C[C@H](C(=O)O)N
+DTR,D-amino acid,121,c1ccc2c(c1)c(c[nH]2)C[C@H](C(=O)O)N
+NLE,LEU,210,CCCC[C@@H](C(=O)O)N
+AIB,ALA,300,CC(C)(C(=O)O)N
+RAR,GLY,2,C(C(=O)O)N

@@ -48,6 +48,30 @@ def test_abc_converges_toward_optimum():
     assert len(history) >= 1
 
 
+def test_abc_search_freezes_coordinator_chirality():
+    # Part D: with frozen={5,11,17,23}, a short search must NEVER change the chirality
+    # at the frozen (pinned coordinator) positions from the seed handedness.
+    n = 24
+    frozen = {5, 11, 17, 23}
+    seed_pat = {i: "L" for i in range(n)}
+    for i in frozen:
+        seed_pat[i] = "D"
+    init = [FoodSource("A" * n, dict(seed_pat), None, None)]
+    best, _ = abc_search(
+        init,
+        _synthetic_fitness,
+        _identity_design_fn,
+        n_cycles=30,
+        colony_size=8,
+        scout_limit=5,
+        chai_eval_budget=10_000,
+        frozen=frozen,
+        rng=random.Random(1),
+    )
+    for i in frozen:
+        assert best.chirality_pattern[i] == seed_pat[i]
+
+
 def test_abc_respects_eval_budget():
     calls = {"n": 0}
 
@@ -235,3 +259,36 @@ def test_fitness_last_structure_recorded_and_threaded_to_design_fn():
     assert any(isinstance(b, str) and b.startswith("struct::") for b in seen["backbones"])
     # the winning source carries the structure the fitness recorded for it.
     assert best.last_structure is not None and best.last_structure.startswith("struct::")
+
+
+# ── track #2: end-to-end Variant-B + ncAA palette smoke (CPU, no GPU) ────────────
+def test_abc_variant_b_with_ncaa_palette_runs_end_to_end():
+    from xenodesign.abc.moves import identity_tokens, ncaa_positions
+    from xenodesign.abc.variants import abc_variant_b_design_fn
+
+    n = 6
+    palette = ["AIB", "ORN"]
+
+    def ncaa_rewarding_fitness(seq, pattern):
+        # Reward ncAA blocks (and a touch of D) so the engine actually KEEPS ncAA candidates.
+        return len(ncaa_positions(seq)) + 0.1 * sum(1 for v in pattern.values() if v == "D")
+
+    design_fn = abc_variant_b_design_fn(
+        rng=random.Random(0), mutation_rate=0.0, ncaa_palette=palette, frozen={0},
+    )
+    init = [FoodSource("A" * n, {i: "L" for i in range(n)}, None, None)]
+    best, history = abc_search(
+        init, ncaa_rewarding_fitness, design_fn,
+        n_cycles=30, colony_size=6, scout_limit=5, chai_eval_budget=5_000,
+        frozen={0}, rng=random.Random(0),
+    )
+    toks = identity_tokens(best.identity)
+    assert len(toks) == n
+    # The search produced at least one ncAA-containing candidate from the palette ...
+    assert any(t.startswith("(") for t in toks)
+    for t in toks:
+        if t.startswith("("):
+            assert t[1:-1] in palette
+    # ... and never touched the frozen coordinator (position 0 stays canonical 'A').
+    assert toks[0] == "A"
+    assert len(history) >= 1

@@ -94,27 +94,53 @@ def _call_design_fn(design_fn: DesignFn, identity: str, pattern: Mapping[int, st
     return design_fn(identity, pattern)
 
 
-def _perturb_chirality(pattern: Mapping[int, str], rng: random.Random) -> dict:
+def _perturb_chirality(
+    pattern: Mapping[int, str],
+    rng: random.Random,
+    frozen: Optional[set] = None,
+) -> dict:
     """Apply one structured chirality move (flip a position or shift the L/D
-    boundary), returning a new pattern."""
+    boundary), returning a new pattern.
+
+    ``frozen`` (0-based positions, e.g. pinned metal coordinators) are NEVER chosen
+    for a flip and are restored to their seed handedness after a boundary shift, so a
+    declared coordinator's chirality can never drift during the search."""
     if not pattern:
         return dict(pattern)
+    frozen = frozen or set()
     if rng.random() < 0.5:
-        i = rng.choice(sorted(pattern))
+        choices = [i for i in sorted(pattern) if i not in frozen]
+        if not choices:  # everything frozen → fall back to a (frozen-preserving) boundary shift
+            return _restore_frozen(moves.shift_boundary_perturb(pattern, rng), pattern, frozen)
+        i = rng.choice(choices)
         return moves.flip_position(pattern, i)
-    return moves.shift_boundary_perturb(pattern, rng)
+    return _restore_frozen(moves.shift_boundary_perturb(pattern, rng), pattern, frozen)
 
 
-def _default_seed_fn(template: FoodSource, design_fn: Optional[DesignFn]):
+def _restore_frozen(new: dict, original: Mapping[int, str], frozen: set) -> dict:
+    """Force every ``frozen`` position back to its handedness in ``original``."""
+    for i in frozen:
+        if i in new and i in original:
+            new[i] = original[i]
+    return new
+
+
+def _default_seed_fn(template: FoodSource, design_fn: Optional[DesignFn],
+                     frozen: Optional[set] = None):
     """Fallback scout seeder: a fresh chirality prior over the template's length,
     with identity refilled by ``design_fn`` (Variant A/B) or kept as the
-    template's identity (chirality-only search)."""
+    template's identity (chirality-only search).
+
+    Frozen (pinned coordinator) positions are seeded at the template's handedness via
+    ``seed_chirality_pattern``'s ``required`` hook, so scouts also honour the pins."""
 
     n = len(template.chirality_pattern)
     base_identity = template.identity
+    required = {i: template.chirality_pattern[i]
+                for i in (frozen or set()) if i in template.chirality_pattern}
 
     def seed(rng: random.Random) -> FoodSource:
-        pattern = moves.seed_chirality_pattern(n, rng=rng)
+        pattern = moves.seed_chirality_pattern(n, required=required or None, rng=rng)
         identity = design_fn(base_identity, pattern) if design_fn else base_identity
         return FoodSource(identity, pattern, None, None, trials=0)
 
@@ -155,6 +181,7 @@ def abc_search(
     chai_eval_budget: Optional[int] = None,
     eval_budget: Optional[int] = None,
     seed_fn: Optional[SeedFn] = None,
+    frozen: Optional[set] = None,
     rng: Optional[random.Random] = None,
     rng_seed: Optional[int] = None,
 ) -> tuple[FoodSource, list[dict]]:
@@ -175,6 +202,9 @@ def abc_search(
             (aliases; ``eval_budget`` wins if both given).
         seed_fn: optional ``(rng) -> FoodSource`` for scouts; defaults to a
             structured chirality re-draw + ``design_fn`` identity refill.
+        frozen: 0-based positions (e.g. pinned metal coordinators) whose chirality is
+            NEVER mutated — never flipped, restored after a boundary shift, and seeded
+            at the template's handedness by the default scout. ``None`` → no pins.
         rng / rng_seed: randomness source. ``rng`` wins; else ``Random(rng_seed)``;
             else a fresh ``Random()``.
 
@@ -189,6 +219,7 @@ def abc_search(
     if budget is None:
         budget = 10 ** 9  # effectively unbounded
     ev = _Evaluator(fitness_fn, budget)
+    frozen = frozen or set()
 
     if not init_pop:
         raise ValueError("init_pop must contain at least one FoodSource")
@@ -196,7 +227,7 @@ def abc_search(
         raise ValueError("colony_size must be >= 1")
 
     template = init_pop[0]
-    seeder = seed_fn or _default_seed_fn(template, design_fn)
+    seeder = seed_fn or _default_seed_fn(template, design_fn, frozen)
 
     # Build the colony: deep-copy the seeds (never touch the caller's objects),
     # then top up to colony_size via the seeder.
@@ -233,12 +264,12 @@ def abc_search(
         for cycle in range(n_cycles):
             # ── employed bees: perturb every source, greedy-keep ──
             for idx in range(len(colony)):
-                _try_neighbour(colony, idx, ev, design_fn, rng, _track)
+                _try_neighbour(colony, idx, ev, design_fn, rng, _track, frozen)
 
             # ── onlooker bees: roulette-select, perturb again ──
             for _ in range(len(colony)):
                 idx = _roulette_select(colony, rng)
-                _try_neighbour(colony, idx, ev, design_fn, rng, _track)
+                _try_neighbour(colony, idx, ev, design_fn, rng, _track, frozen)
 
             # ── scout bees: re-seed the most-stagnant over-limit source ──
             stale = [i for i, s in enumerate(colony) if s.trials > scout_limit]
@@ -283,11 +314,12 @@ def _try_neighbour(
     design_fn: Optional[DesignFn],
     rng: random.Random,
     track: Callable[[FoodSource], None],
+    frozen: Optional[set] = None,
 ) -> None:
     """Generate a neighbour of ``colony[idx]``, evaluate, greedy-keep or bump
     stagnation. May raise ``_BudgetExhausted`` (propagated to stop the search)."""
     cur = colony[idx]
-    new_pattern = _perturb_chirality(cur.chirality_pattern, rng)
+    new_pattern = _perturb_chirality(cur.chirality_pattern, rng, frozen)
     # Re-design identity on the candidate's ACTUAL last structure (Variant A): the source's
     # cached backbone is threaded to a structure-aware design_fn; legacy 2-arg design_fns ignore it.
     if design_fn:

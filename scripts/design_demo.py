@@ -38,168 +38,23 @@ _TARGET_ENTITY = {
 }
 
 
-# ── Helpers reused from test_loop_end_to_end_gpu.py ───────────────────────────
-
-def _best_cif_path(out_dir: Path) -> Path:
-    import re
-    score_files = sorted(out_dir.rglob("scores.model_idx_*.npz"))
-    if score_files:
-        best_idx, best_agg = 0, -np.inf
-        for f in score_files:
-            d = np.load(f)
-            agg = float(np.asarray(d["aggregate_score"]).reshape(-1)[0])
-            idx = int(re.search(r"idx_(\d+)", f.name).group(1))
-            if agg > best_agg:
-                best_agg = agg
-                best_idx = idx
-        cif = next(out_dir.rglob(f"pred.model_idx_{best_idx}.cif"), None)
-        if cif is not None:
-            return cif
-    return sorted(out_dir.rglob("*.cif"))[0]
-
-
-def _all_atoms_from_chain(cif_path: Path, chain_name: str):
-    import gemmi
-    structure = gemmi.read_structure(str(cif_path))
-    coords_list, elements_list = [], []
-    for model in structure:
-        for chain in model:
-            if chain.name != chain_name:
-                continue
-            for res in chain:
-                for atom in res:
-                    coords_list.append([atom.pos.x, atom.pos.y, atom.pos.z])
-                    elements_list.append(atom.element.name)
-        break
-    if not coords_list:
-        return np.zeros((0, 3), dtype=np.float32), []
-    return np.array(coords_list, dtype=np.float32), elements_list
-
-
-def _backbone_array_from_residues(residues: list[dict]) -> np.ndarray:
-    arr = np.zeros((len(residues), 4, 3), dtype=np.float32)
-    for i, res in enumerate(residues):
-        arr[i, 0] = res["N"]
-        arr[i, 1] = res["CA"]
-        arr[i, 2] = res["C"]
-        arr[i, 3] = res.get("CB", res["CA"])
-    return arr
-
-
-def _chirality_violation_frac_from_cif(cif_path: Path) -> float:
-    from xenodesign.eval.gate_tier0a import backbone_by_residue_from_cif
-    from xenodesign.chirality import is_chirality_violation
-
-    residues = backbone_by_residue_from_cif(cif_path, "B")
-    if not residues:
-        residues = backbone_by_residue_from_cif(cif_path, "b")
-    if not residues:
-        return 0.0
-
-    total = violations = 0
-    for res in residues:
-        if "CB" not in res:
-            continue
-        total += 1
-        if is_chirality_violation(res["N"], res["CA"], res["C"], res["CB"], "D"):
-            violations += 1
-    return violations / total if total > 0 else 0.0
-
-
-# ── Backend wrappers (same as test_loop_end_to_end_gpu.py) ────────────────────
-
-def _as_target_list(target_entity):
-    """Normalise the target arg to a chain-ordered entity list (the binder is appended LAST).
-
-    Accepts a single dict (legacy single-target callers — α), a list of dicts (multi-chain /
-    ligand+metal targets), or ``None``/empty (no-target free-peptide mode). Keeping a single
-    dict == ``[dict]`` keeps the α path byte-identical (binder still becomes chain B)."""
-    if target_entity is None:
-        return []
-    if isinstance(target_entity, dict):
-        return [target_entity]
-    return list(target_entity)
-
-
-def _build_entities(target_entities, binder_l_seq):
-    """[*target chains, binder] — binder is ALWAYS the LAST chain (Chai labels A,B,C… in order),
-    so multi-chain protein / DNA-RNA / ligand+metal targets all order correctly and the binder's
-    chain letter is ``chr(ord('A') + len(target_entities))``."""
-    return [
-        *target_entities,
-        {"type": "protein", "name": "binder",
-         "sequence": binder_l_seq, "chirality": "D"},
-    ]
-
-
-class _LoopBackendWrapper:
-    """Translates LoopState API → ChaiBackend.truncated_refine."""
-
-    def __init__(self, chai_backend, target_entity=None, *, msa_directory=None):
-        self._backend = chai_backend
-        self._target_entities = _as_target_list(target_entity)
-        self._msa_directory = msa_directory
-        self.last_out_dir: Path | None = None
-
-    def truncated_refine(self, state, ref_time_steps, out_dir):
-        from xenodesign.io_spec import d_fasta_to_one_letter
-
-        out_dir = Path(out_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-
-        binder_l_seq = d_fasta_to_one_letter(state.d_fasta)
-        entities = _build_entities(self._target_entities, binder_l_seq)
-
-        self.last_out_dir = out_dir
-        return self._backend.truncated_refine(
-            structure={"entities": entities, "coords": state.coords},
-            ref_time_steps=ref_time_steps,
-            out_dir=out_dir,
-        )
-
-
-class _PredictBackendWrapper:
-    """Per-iteration structure step that runs a FULL ChaiBackend.predict (not truncated).
-
-    Drop-in ``refine_fn`` for ``HalluLoop`` (signature ``(state, ref_time_steps, out_dir) ->
-    Prediction``). Unlike ``_LoopBackendWrapper.truncated_refine``, this re-folds the binder
-    sequence from scratch (200-step predict) each iteration: slower, but (a) it preserves
-    D-chirality better and (b) it supports ``constraint_path`` — the vendored truncated sampler
-    does NOT (see chai_truncated.py TODO #27). Used by the RESTRAINED α run so the pin-polarity
-    restraint is honoured on every iteration. ``ref_time_steps`` is ignored (predict is full).
-
-    Like ``_LoopBackendWrapper`` it builds entities=[target, binder] so Chai labels
-    TARGET=chain A, BINDER=chain B, and records ``last_out_dir`` for the sequence-update step.
-    The binder is emitted with chirality 'D' (same as the truncated path).
-    """
-
-    def __init__(self, chai_backend, target_entity=None,
-                 constraint_path: "Path | str | None" = None,
-                 num_diffn_timesteps: int = 200, *, msa_directory=None):
-        self._backend = chai_backend
-        self._target_entities = _as_target_list(target_entity)
-        self._constraint_path = Path(constraint_path) if constraint_path is not None else None
-        self._num_diffn_timesteps = num_diffn_timesteps
-        self._msa_directory = msa_directory
-        self.last_out_dir: Path | None = None
-
-    def __call__(self, state, ref_time_steps, out_dir):
-        from xenodesign.io_spec import d_fasta_to_one_letter
-
-        out_dir = Path(out_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-
-        binder_l_seq = d_fasta_to_one_letter(state.d_fasta)
-        entities = _build_entities(self._target_entities, binder_l_seq)
-
-        self.last_out_dir = out_dir
-        return self._backend.predict(
-            entities,
-            out_dir,
-            num_diffn_timesteps=self._num_diffn_timesteps,
-            constraint_path=self._constraint_path,
-            msa_directory=self._msa_directory,
-        )
+# ── Shared CIF / backend plumbing (MOD-1: moved INTO the package) ─────────────
+# These helpers used to be DEFINED here and imported back into the package (an inverted
+# dependency). They now live in xenodesign.cif_io / xenodesign.backends.wrappers; this demo
+# re-exports them so its CLI keeps working and any external caller importing them from
+# ``scripts.design_demo`` stays compatible.
+from xenodesign.cif_io import (  # noqa: E402,F401
+    _all_atoms_from_chain,
+    _backbone_array_from_residues,
+    _best_cif_path,
+    _chirality_violation_frac_from_cif,
+)
+from xenodesign.backends.wrappers import (  # noqa: E402,F401
+    _as_target_list,
+    _build_entities,
+    _LoopBackendWrapper,
+    _PredictBackendWrapper,
+)
 
 
 def _make_sequence_update_fn(wrapper: _LoopBackendWrapper):

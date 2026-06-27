@@ -170,6 +170,10 @@ class AbcKnobs:
     fitness_steps: int = 15           # K* fast diffusion steps (10-25; calibrated cheap point)
     w_ptm: float = 0.7                # pTM weight (primary discriminator)
     w_termini: float = 0.3            # C-N termini-proximity weight (secondary; short-peptide-critical)
+    # Variant-B ncAA palette (track #2): CCD 3-letter codes the identity search may propose,
+    # emitted as ``(XXX)`` in the FASTA. EMPTY = ncAA OFF (default → existing behaviour). A
+    # non-empty list opts in; codes are validated (abc.ncaa.validate_palette) before use.
+    ncaa_palette: list = field(default_factory=list)
 
 
 @dataclass
@@ -202,6 +206,21 @@ class DesignConfig:
     use_pll: bool = True
     restraints_on: bool = True
     binder_length: int = 0   # 0 = per-class default (resolve_binder_length); else clamp 6..50
+    # Mixed-chirality ABC switch (decoupled from the loop launcher --search). 'none' = run the
+    # greedy/beam HalluLoop (homochiral). 'A' = ABC chirality search + MPNN identity (Variant a);
+    # 'B' = ABC chirality+identity, MPNN warm-start only (Variant b). Activates ABC for ANY
+    # binder/target. Cyclic (mixed-chirality by definition) defaults to 'A' (see PRESETS).
+    mixed_chirality: str = "none"  # none|A|B
+    # ncAA palette SCOPE for the Variant-B mixed-chirality search (derived from the MONDE-T
+    # catalog; see xenodesign.abc.ncaa.build_palette). 'd_only' = canonical D set only (default);
+    # 'd_common' = D set + top-`ncaa_top_x` MONDE-T ncAA by frequency; 'all' = D set + ALL MONDE-T
+    # ncAA (no cap). `ncaa_top_x` is the cut for 'd_common' (default 20).
+    ncaa_dict: str = "d_only"          # d_only|d_common|all
+    ncaa_top_x: int = 20               # top-X MONDE-T ncAA for 'd_common'
+
+
+VALID_MIXED_CHIRALITY = ("none", "A", "B")
+VALID_NCAA_DICT = ("d_only", "d_common", "all")
 
 
 PRESETS: dict[str, DesignConfig] = {
@@ -222,25 +241,37 @@ PRESETS: dict[str, DesignConfig] = {
         target=TargetSpec(target_type="metal", smiles="[Zn+2]"),
         restraint=RestraintConfig(kind="metal_coordination"),
         gates=GateConfig(chirality=False, entropy=False, pll_veto=False),
-        objective="iptm"),
+        objective="iptm",
+        mixed_chirality="A"),  # cyclic = mixed-chirality by definition -> ABC Variant A default
 }
 
 
-def _apply_dotted(cfg: DesignConfig, key: str, value):
-    """Set 'loop.iters'/'target.msa'/'seed' style overrides on the dataclass tree."""
+def _set_recursive(cfg: DesignConfig, key: str, value):
+    """Recursive setter shared by the dotted-key and nested-dict override paths.
+
+    `key` may be dotted ('loop.iters') to descend the dataclass tree; a dict `value`
+    on a nested dataclass attribute is overlaid recursively (key-by-key).
+    """
     if "." in key:
         head, tail = key.split(".", 1)
-        _apply_dotted(getattr(cfg, head), tail, value)
+        _set_recursive(getattr(cfg, head), tail, value)
+    elif (isinstance(value, dict) and hasattr(cfg, key)
+          and dataclasses.is_dataclass(getattr(cfg, key))):
+        child = getattr(cfg, key)
+        for k, v in value.items():
+            _set_recursive(child, k, v)
     else:
         setattr(cfg, key, value)
 
 
+def _apply_dotted(cfg: DesignConfig, key: str, value):
+    """Set 'loop.iters'/'target.msa'/'seed' style overrides on the dataclass tree."""
+    _set_recursive(cfg, key, value)
+
+
 def _overlay(cfg: DesignConfig, data: dict):
     for k, v in data.items():
-        if isinstance(v, dict) and hasattr(cfg, k) and dataclasses.is_dataclass(getattr(cfg, k)):
-            _overlay(getattr(cfg, k), v)
-        else:
-            setattr(cfg, k, v)
+        _set_recursive(cfg, k, v)
 
 
 def resolve_config(binder_class: str, target_type: str | None = None,
@@ -268,6 +299,20 @@ def resolve_config(binder_class: str, target_type: str | None = None,
             f"binder_length must be an int (0 = per-class default), got {cfg.binder_length!r}")
     if cfg.binder_length < 0:
         raise ValueError(f"binder_length must be >= 0, got {cfg.binder_length}")
+    if cfg.mixed_chirality not in VALID_MIXED_CHIRALITY:
+        raise ValueError(
+            f"mixed_chirality must be one of {VALID_MIXED_CHIRALITY}, got {cfg.mixed_chirality!r}")
+    if cfg.ncaa_dict not in VALID_NCAA_DICT:
+        raise ValueError(
+            f"ncaa_dict must be one of {VALID_NCAA_DICT}, got {cfg.ncaa_dict!r}")
+    if not isinstance(cfg.ncaa_top_x, int) or isinstance(cfg.ncaa_top_x, bool) or cfg.ncaa_top_x < 0:
+        raise ValueError(f"ncaa_top_x must be a non-negative int, got {cfg.ncaa_top_x!r}")
+    # DERIVE the Variant-B ncAA palette from the --ncaa_dict scope (MONDE-T catalog) unless an
+    # explicit palette was supplied (config-file or --abc.ncaa_palette override wins). The 4-code
+    # DEFAULT_NCAA_PALETTE survives only as a code-level fallback inside abc.ncaa, not here.
+    if not cfg.abc.ncaa_palette:
+        from xenodesign.abc.ncaa import build_palette
+        cfg.abc.ncaa_palette = build_palette(cfg.ncaa_dict, cfg.ncaa_top_x)
     # NOTE: cfg.device is left as the unset sentinel here so config resolution stays
     # torch-free; the actual device is resolved at point-of-use (dispatch._make_predictor)
     # and baked into the provenance by dump_config().

@@ -22,6 +22,39 @@ from xenodesign.mirror import D_TO_L, reflect_coords
 # Canonical L three-letter codes (the LigandMPNN / CARBonAra output alphabet), incl. GLY.
 CANONICAL_L = set(AA1_TO_AA3.values())
 
+# Three-letter L code -> one-letter (the inverse-folding alphabet). Built from AA1_TO_AA3.
+_AA3_TO_AA1 = {three: one for one, three in AA1_TO_AA3.items()}
+
+
+def l_projected_known_seq(codes: Sequence[str]) -> str:
+    """Project each per-position residue code to its L-parent ONE-LETTER identity (spec §2.8, B2).
+
+    This is the REAL known sequence fed to the inverse-folding backend so it natively preserves
+    fixed positions and conditions free positions on real context — instead of an all-Ala
+    placeholder. The projection is chirality-agnostic (a D residue maps to the SAME letter as its
+    L parent), matching the mirror-into-L frame the backbone is reflected into:
+
+      * L-canonical (HIS) / achiral GLY -> its own one-letter (H / G).
+      * D-canonical (DHI) -> its L parent's one-letter (DHI -> HIS -> 'H').
+      * ncAA -> nearest canonical via ``ncaa_proxy.proxy_for`` (e.g. SEP -> SER -> 'S'); if the
+        ncAA has no proxy it is GLY ('G', a neutral backbone-only placeholder).
+    """
+    from xenodesign.ncaa_proxy import proxy_for
+
+    out: list[str] = []
+    for code in codes:
+        c = str(code).upper()
+        three = D_TO_L.get(c, c)        # D-canonical -> L parent; L/achiral pass through
+        if three in _AA3_TO_AA1:
+            out.append(_AA3_TO_AA1[three])
+            continue
+        proxy = proxy_for(c)            # genuine ncAA -> conformational proxy
+        if proxy and proxy in _AA3_TO_AA1:
+            out.append(_AA3_TO_AA1[proxy])
+        else:
+            out.append("G")            # unrepresentable -> neutral GLY placeholder
+    return "".join(out)
+
 
 @dataclass
 class InverseFoldingInputs:
@@ -132,8 +165,41 @@ class InverseFoldingBackend(Protocol):
         fixed_mask: Sequence[bool],          # True = keep this design position fixed
         temperature: float,                  # sampling temperature
         num_seqs: int,                       # number of candidate sequences to return
+        known_seq: "str | None" = None,      # L-projected real sequence (B2); fixed positions
+                                             # are kept FROM this (chain_mask=0), free designed
     ) -> List[str]:                          # designed-chain one-letter L seqs (len n_res)
         ...
+
+
+def _accepts_known_seq(fn) -> bool:
+    """True iff ``fn`` declares a ``known_seq`` parameter (or an **kwargs sink), so the B2 known
+    sequence can be forwarded; legacy 6-arg backends/fakes (no such param) are called without it."""
+    import inspect
+
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    if "known_seq" in params:
+        return True
+    return any(p.kind == p.VAR_KEYWORD for p in params.values())
+
+
+def call_backend(fn, design_backbone, context_coords, context_elements,
+                 fixed_mask, temperature, num_seqs, *, known_seq=None):
+    """Invoke an InverseFoldingBackend, threading ``known_seq`` (B2) only when it opts in.
+
+    Centralises the known_seq-aware call so every seam routed through it (SequenceUpdater,
+    MultiCandidate, the C-term Gly anchor) preserves the L-projected real sequence while staying
+    compatible with legacy 6-arg backends and test fakes.
+
+    Known gap: beam.py bypasses this helper, so beam search does NOT yet thread known_seq through
+    call_backend; this is subsumed by the planned composer refactor."""
+    if known_seq is not None and _accepts_known_seq(fn):
+        return fn(design_backbone, context_coords, context_elements,
+                  fixed_mask, temperature, num_seqs, known_seq=known_seq)
+    return fn(design_backbone, context_coords, context_elements,
+              fixed_mask, temperature, num_seqs)
 
 
 def is_inverse_folding_backend(fn) -> bool:
@@ -154,8 +220,16 @@ def is_inverse_folding_backend(fn) -> bool:
         if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
     ]
     has_var_positional = any(p.kind == p.VAR_POSITIONAL for p in sig.parameters.values())
-    # The protocol passes 6 positional args; accept exactly-6 or *args sinks.
-    return len(positional) == 6 or (has_var_positional and len(positional) <= 6)
+    # The protocol passes 6 positional args plus the OPTIONAL `known_seq` (B2). Accept a callable
+    # that takes the 6 required positional args (the 7th, known_seq, may be positional-with-default
+    # or keyword-only) or an *args sink.
+    n_required_positional = sum(
+        1 for p in positional if p.default is p.empty
+    )
+    return (
+        (6 <= len(positional) <= 7 and n_required_positional <= 6)
+        or (has_var_positional and n_required_positional <= 6)
+    )
 
 
 def assemble_complex_fasta(
@@ -234,12 +308,14 @@ class MultiCandidate:
         self._top_k = int(top_k)
 
     def __call__(self, design_backbone, context_coords, context_elements,
-                 fixed_mask, temperature, num_seqs):
+                 fixed_mask, temperature, num_seqs, known_seq=None):
         # The wrapper's own num_seqs governs oversampling; the caller's value is ignored
         # (a bare SequenceUpdater passes 1 — MultiCandidate forces the real sample count).
-        candidates = self._backend(
-            design_backbone, context_coords, context_elements,
-            fixed_mask, temperature, self._num_seqs,
+        # known_seq (B2) is forwarded only when the wrapped backend accepts it, so a legacy
+        # 6-arg fake (no known_seq param) still works unchanged.
+        candidates = call_backend(
+            self._backend, design_backbone, context_coords, context_elements,
+            fixed_mask, temperature, self._num_seqs, known_seq=known_seq,
         )
         if not candidates:
             raise ValueError("backend returned no candidates")
