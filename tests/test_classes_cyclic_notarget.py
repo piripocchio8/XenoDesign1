@@ -73,7 +73,8 @@ def test_restraints_no_target_no_closure_is_none(tmp_path):
 
 
 def test_restraints_metal_path_unchanged(tmp_path):
-    """Sanity: the metal (Zn present) path still emits coordination rows on chain B."""
+    """Sanity: the metal (Zn present) path still emits coordination rows. With declared liganding
+    atoms (ND1) these are now NATIVE COVALENT @atom bonds (metal side '@ZN'), not contacts."""
     from xenodesign.coordinators import parse_coord_residues
     coords = [(c.pos, c.one_letter, c.three_letter, c.chirality, c.atom)
               for c in parse_coord_residues("H6,DHI12,H18,DHI24")]
@@ -84,7 +85,9 @@ def test_restraints_metal_path_unchanged(tmp_path):
     zn = [{"type": "ligand", "name": "zn"}]
     path = Cyclic().restraints(cfg, case, tmp_path, target_ctx=(zn, None))
     rows = parse_restraints(path)
-    assert any(r["connection_type"] == "contact" for r in rows)
+    coord_rows = [r for r in rows if "metal_coord_" in r["restraint_id"]]
+    assert coord_rows and all(r["connection_type"] == "covalent" for r in coord_rows)
+    assert all(r["res_idxB"] == "@ZN" for r in coord_rows)
 
 
 # ── 3. intramolecular objective terms + combination ──────────────────────────
