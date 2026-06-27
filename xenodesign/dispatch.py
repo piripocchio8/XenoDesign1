@@ -285,7 +285,7 @@ def _is_mixed_chirality(cfg: DesignConfig) -> bool:
 
 
 def _run_abc(cfg: DesignConfig, backend, seed_one_letter: str, out_dir: "Path",
-             variant: str | None = None) -> dict:
+             variant: str | None = None, roles=None) -> dict:
     """Wire + run the ABC mixed-chirality search and assemble the result dict.
 
     Objective (decided 2026-06-25): pTM (primary) + C-N termini-distance closure proxy
@@ -332,7 +332,7 @@ def _run_abc(cfg: DesignConfig, backend, seed_one_letter: str, out_dir: "Path",
     else:
         # Variant A: the coordinate-only LigandMPNN adapter (default SequenceUpdater backend).
         from xenodesign.sequence_update import _ligandmpnn_design_fn
-        design_fn = abc_variant_a_design_fn(_ligandmpnn_design_fn)
+        design_fn = abc_variant_a_design_fn(_ligandmpnn_design_fn, roles=roles, frozen=frozen)
 
     n = len(seed_one_letter)
     init_pattern = seed_chirality_pattern(n, rng=rng)
@@ -419,7 +419,7 @@ def run_design(cfg: DesignConfig) -> dict:
     # the greedy/beam HalluLoop below. ``loop.py`` is never touched.
     if _is_mixed_chirality(cfg):
         variant = "b" if cfg.mixed_chirality == "B" else "a"
-        return _run_abc(cfg, adapter, seed_spec.one_letter, out_dir, variant=variant)
+        return _run_abc(cfg, adapter, seed_spec.one_letter, out_dir, variant=variant, roles=roles)
 
     # Restraint emission (class-specific; consulted only when restraints are on).
     constraint_path = (cls.restraints(cfg, case, out_dir, (entities, msa_dir))
