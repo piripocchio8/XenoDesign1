@@ -269,6 +269,48 @@ def _cterm_gly_anchor(backend_fn):
     return _wrapped
 
 
+def _coordinator_anchor(backend_fn, coordinators):
+    """Wrap an InverseFoldingBackend so each DECLARED metal coordinator's identity is re-imposed
+    POST-design, mirroring ``_cterm_gly_anchor``.
+
+    GPU-confirmed bug: in this codebase ``fixed_mask[i] = True`` makes LigandMPNN emit an 'A'
+    placeholder at i (see sequence_update.py:199-200, _ligandmpnn_design_fn), NOT "preserve the
+    existing residue". So freezing the coordinator positions BLANKED the pinned His to (D-)Ala
+    rather than keeping them. The fix (same pattern as the C-term Gly anchor): set
+    ``fixed_mask[pos0] = True`` (deterministic / no wasted MPNN capacity) AND overwrite
+    ``candidate[pos0] = one_letter`` (the declared identity, e.g. 'H') in every returned candidate.
+
+    ``coordinators``: list of (pos0, one_letter) — 0-based position + the declared one-letter
+    identity. The chirality is re-imposed separately, by the d_fasta encode (see
+    ``SequenceUpdater.update`` + the cyclic seq-update ``chirality_pattern``).
+
+    6-positional-arg signature -> itself an InverseFoldingBackend, so it composes with
+    MultiCandidate and ``_cterm_gly_anchor``. When wrapping a Gly-anchored backend, the
+    coordinator overwrite runs AFTER the Gly anchor, so a coordinator that lands on the C-term
+    correctly WINS over the Gly (the overwrite is applied last)."""
+    coords = [(int(p), str(aa)) for p, aa in (coordinators or ())]
+
+    def _wrapped(design_backbone, context_coords, context_elements,
+                 fixed_mask, temperature, num_seqs):
+        fm = list(fixed_mask)
+        for pos0, _aa in coords:
+            if 0 <= pos0 < len(fm):
+                fm[pos0] = True   # coordinator position is non-designable (deterministic)
+        cands = backend_fn(design_backbone, context_coords, context_elements,
+                           fm, temperature, num_seqs)
+        out = []
+        for c in cands:
+            if c:
+                chars = list(c)
+                for pos0, aa in coords:
+                    if 0 <= pos0 < len(chars):
+                        chars[pos0] = aa   # re-impose the declared coordinator identity
+                c = "".join(chars)
+            out.append(c)
+        return out
+    return _wrapped
+
+
 def build_alpha_seed(case, target_seq: str, use_pepmlm: bool = True,
                      seed_seq: str | None = None, reverse: bool = True,
                      pepmlm_seed: int | None = None, pepmlm_temperature: float = 1.0) -> str:
@@ -372,7 +414,8 @@ def _make_base_backend(backend: str = "ligandmpnn"):
 
 def make_alpha_seq_update_fn(wrapper: _LoopBackendWrapper, num_seqs: int = _DEFAULT_NUM_SEQS,
                              backend: str = "ligandmpnn", roles=None,
-                             frozen_positions=None):
+                             frozen_positions=None, coordinators=None,
+                             chirality_pattern=None):
     """Build the loop's sequence_update_fn(prediction) -> one-letter L seq, wiring the
     P2 drift fix: a SequenceUpdater whose design_fn is a MultiCandidate over the selected
     context-aware inverse-folding base (oversample `num_seqs`, spec §5).
@@ -404,7 +447,13 @@ def make_alpha_seq_update_fn(wrapper: _LoopBackendWrapper, num_seqs: int = _DEFA
     # never overwritten by the tokenization Gly (correction; ADR-011 / FASTA audit). backend
     # defaults to 'ligandmpnn' => identical to the prior MultiCandidate(_cterm_gly_anchor(...)).
     base = shim._make_base_backend(backend)
-    design_fn = MultiCandidate(shim._cterm_gly_anchor(base), num_seqs=num_seqs,
+    anchored = shim._cterm_gly_anchor(base)
+    # coordinators (0-based pos, one-letter): re-impose the DECLARED donor identity POST-design.
+    # fixed_mask alone blanks them to 'A' (GPU-confirmed bug), so wrap the Gly-anchored base with
+    # _coordinator_anchor — its overwrite runs LAST, so a coordinator on the C-term wins over Gly.
+    if coordinators:
+        anchored = shim._coordinator_anchor(anchored, coordinators)
+    design_fn = MultiCandidate(anchored, num_seqs=num_seqs,
                                key_fn=sequence_quality_key)
     # frozen_positions (0-based): declared coordinator positions forced fixed in the MPNN
     # mask so pinned donors never drift (cyclic-metal). alpha path passes None → no change.
@@ -432,12 +481,21 @@ def make_alpha_seq_update_fn(wrapper: _LoopBackendWrapper, num_seqs: int = _DEFA
         ctx_coords, ctx_elements = _self()._all_atoms_from_chain(cif, context_chain)
         if ctx_coords.shape[0] == 0:
             ctx_coords, ctx_elements = _self()._all_atoms_from_chain(cif, context_chain.lower())
-        return {
+        kw = {
             "design_backbone": design_backbone,
             "design_codes": ["DAL"] * design_backbone.shape[0],
             "context_coords": ctx_coords,
             "context_elements": ctx_elements,
         }
+        # chirality_pattern (0-based {pos: 'L'|'D'}): per-position handedness for the d_fasta
+        # re-encode. Cyclic threads this so L coordinators (e.g. His6/His18) stay L ('HIS') and
+        # D coordinators emit '(DHI)', while the rest default to the historical all-D cyclic
+        # behaviour. alpha passes None -> the all-D path is byte-identical to before.
+        if chirality_pattern is not None:
+            # The pattern is keyed by the FULL binder length; size it to the extracted backbone.
+            n = design_backbone.shape[0]
+            kw["chirality_pattern"] = {i: chirality_pattern.get(i, "D") for i in range(n)}
+        return kw
 
     base_fn = make_sequence_update_fn(updater, _extract, emit="one_letter")
 

@@ -187,12 +187,26 @@ class Cyclic:
         ``roles`` threads the dispatch chain contract: metal case (Zn=A) -> binder 'B';
         no-target free peptide -> binder/context BOTH 'A' (the bug that crashed iter_000)."""
         from xenodesign.classes.alpha import make_alpha_seq_update_fn
-        # Freeze declared coordinators in the MPNN mask so pinned donors (e.g. His) never
-        # drift. coord_residues tuple[0] is the 1-based position -> 0-based for the mask.
-        frozen_positions = {int(t[0]) - 1 for t in self._coord_residues(cfg)}
+        # coord_residues tuple = (1-based pos, one_letter, three_letter, chirality).
+        coord_residues = self._coord_residues(cfg)
+        # Freeze declared coordinators in the MPNN mask so they're non-designable (-> deterministic;
+        # MPNN emits an 'A' placeholder there). Kept harmlessly alongside `coordinators`; both mark
+        # the same positions non-designable.
+        frozen_positions = {int(t[0]) - 1 for t in coord_residues}
+        # coordinators (0-based pos, one_letter): GPU-confirmed bug — freezing alone BLANKED the
+        # pinned His to D-Ala, because fixed_mask=True means "emit 'A'", not "preserve". The
+        # coordinator-anchor re-imposes the declared identity POST-design (mirrors the C-term Gly).
+        coordinators = [(int(t[0]) - 1, t[1]) for t in coord_residues]
+        # chirality_pattern (0-based {pos: 'L'|'D'}): pin each coordinator's DECLARED handedness so
+        # the d_fasta encodes L coords as bare 'H' (HIS) and D coords as '(DHI)'. The all-D path
+        # would WRONGLY make an L-His D; non-coordinator positions default to D in the extractor
+        # (the historical all-D cyclic default).
+        chirality_pattern = {int(t[0]) - 1: t[3] for t in coord_residues}
         return make_alpha_seq_update_fn(wrapper, num_seqs=cfg.loop.num_seqs,
                                         backend=cfg.loop.backend, roles=roles,
-                                        frozen_positions=frozen_positions or None)
+                                        frozen_positions=frozen_positions or None,
+                                        coordinators=coordinators or None,
+                                        chirality_pattern=chirality_pattern or None)
 
     def accept_fns(self, cfg):
         from xenodesign.loop import compose_accept_fns

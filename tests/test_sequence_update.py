@@ -316,3 +316,125 @@ def test_frozen_positions_default_none_unchanged():
         context_coords=np.zeros((0, 3)), context_elements=[],
     )
     assert captured["mask"] == [False, True, False]
+
+
+# --- Part D: _coordinator_anchor re-imposes the declared identity POST-design ---
+# (GPU-confirmed bug: fixed_mask[i]=True makes LigandMPNN emit an 'A' placeholder at i, NOT
+# "preserve the existing residue" — so pinned His coordinators collapsed to D-Ala. The anchor
+# wrapper re-writes the declared identity over the backend output, mirroring _cterm_gly_anchor.)
+
+def test_coordinator_anchor_reimposes_identity_over_blank_backend():
+    from xenodesign.classes._alpha_internals import _coordinator_anchor
+
+    # A backend that blanks everything to 'A' (exactly the failing fixed_mask behaviour).
+    def blank_backend(bb, cc, ce, fm, t, n):
+        return ["A" * 24 for _ in range(n)]
+
+    coords = [(5, "H"), (11, "H"), (17, "H"), (23, "H")]
+    wrapped = _coordinator_anchor(blank_backend, coords)
+    cands = wrapped(np.zeros((24, 4, 3)), np.zeros((0, 3)), [],
+                    [False] * 24, 0.1, 2)
+    assert len(cands) == 2
+    for c in cands:
+        for i in range(24):
+            assert c[i] == ("H" if i in {5, 11, 17, 23} else "A")
+
+
+def test_coordinator_anchor_sets_fixed_mask_true_at_coord_positions():
+    from xenodesign.classes._alpha_internals import _coordinator_anchor
+
+    captured = {}
+
+    def capture_backend(bb, cc, ce, fm, t, n):
+        captured["mask"] = list(fm)
+        return ["A" * 24 for _ in range(n)]
+
+    wrapped = _coordinator_anchor(capture_backend, [(5, "H"), (11, "H")])
+    wrapped(np.zeros((24, 4, 3)), np.zeros((0, 3)), [], [False] * 24, 0.1, 1)
+    assert captured["mask"][5] is True
+    assert captured["mask"][11] is True
+    assert captured["mask"][0] is False
+
+
+def test_coordinator_anchor_composes_with_cterm_gly():
+    # Compose order: _coordinator_anchor(_cterm_gly_anchor(backend)). C-term stays 'G' unless
+    # it is itself a coordinator, in which case the coordinator identity must win.
+    from xenodesign.classes._alpha_internals import (
+        _coordinator_anchor,
+        _cterm_gly_anchor,
+    )
+
+    def blank_backend(bb, cc, ce, fm, t, n):
+        return ["A" * 24 for _ in range(n)]
+
+    coords = [(5, "H"), (11, "H"), (17, "H"), (23, "H")]  # 23 == C-term
+    wrapped = _coordinator_anchor(_cterm_gly_anchor(blank_backend), coords)
+    (c,) = wrapped(np.zeros((24, 4, 3)), np.zeros((0, 3)), [], [False] * 24, 0.1, 1)
+    # C-term (23) is a coordinator -> 'H' wins over the Gly anchor.
+    assert c[23] == "H"
+    for i in {5, 11, 17}:
+        assert c[i] == "H"
+    assert c[:5] == "A" * 5
+
+
+def test_coordinator_anchor_cterm_gly_when_cterm_not_coordinator():
+    from xenodesign.classes._alpha_internals import (
+        _coordinator_anchor,
+        _cterm_gly_anchor,
+    )
+
+    def blank_backend(bb, cc, ce, fm, t, n):
+        return ["A" * 24 for _ in range(n)]
+
+    coords = [(5, "H"), (11, "H"), (17, "H")]  # 23 is NOT a coordinator
+    wrapped = _coordinator_anchor(_cterm_gly_anchor(blank_backend), coords)
+    (c,) = wrapped(np.zeros((24, 4, 3)), np.zeros((0, 3)), [], [False] * 24, 0.1, 1)
+    assert c[23] == "G"           # C-term Gly anchor preserved
+    assert c[17] == "H"
+
+
+def test_coordinator_anchor_is_inverse_folding_backend():
+    # 6-positional-arg signature -> itself an InverseFoldingBackend (wrappable by MultiCandidate).
+    from xenodesign.classes._alpha_internals import _coordinator_anchor
+    from xenodesign.inverse_folding import is_inverse_folding_backend
+
+    wrapped = _coordinator_anchor(lambda *a: ["A"], [(0, "H")])
+    assert is_inverse_folding_backend(wrapped)
+
+
+# --- Part E: end-to-end through SequenceUpdater.update — identity AND chirality ---
+
+def test_coordinator_identity_and_chirality_through_updater():
+    # Fake design_fn blanks to all-'A' (the failing backend). Coordinators at 0-based
+    # 5,11,17,23 with declared chirality L,D,L,D. After the anchor, one_letter has 'H' at
+    # those positions; the emitted d_fasta encodes L coords as bare 'H' and D coords as '(DHI)'.
+    from xenodesign.classes._alpha_internals import _coordinator_anchor
+
+    def blank_backend(bb, cc, ce, fm, t, n):
+        return ["A" * 24 for _ in range(n)]
+
+    coords = [(5, "H"), (11, "H"), (17, "H"), (23, "H")]
+    design_fn = _coordinator_anchor(blank_backend, coords)
+    upd = SequenceUpdater(design_fn=design_fn)
+
+    # Coordinator handedness pinned (L for 5/17, D for 11/23); the rest default to D
+    # (historical all-D cyclic default).
+    chirality_pattern = {i: "D" for i in range(24)}
+    chirality_pattern.update({5: "L", 11: "D", 17: "L", 23: "D"})
+
+    r = upd.update(
+        design_backbone=np.zeros((24, 4, 3)),
+        design_codes=["DAL"] * 24,
+        context_coords=np.zeros((0, 3)), context_elements=[],
+        chirality_pattern=chirality_pattern,
+    )
+    # (a) identity: H at every coordinator position.
+    for i in {5, 11, 17, 23}:
+        assert r.one_letter[i] == "H"
+    # (b) chirality encoding in d_fasta: tokenize and check coordinator blocks.
+    from xenodesign.abc.moves import identity_tokens
+    toks = identity_tokens(r.d_fasta)
+    assert toks[5] == "H"        # L-His -> bare canonical (chai reads as HIS)
+    assert toks[11] == "(DHI)"   # D-His -> D-CCD block
+    assert toks[17] == "H"
+    assert toks[23] == "(DHI)"

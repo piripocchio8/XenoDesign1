@@ -102,6 +102,33 @@ def test_cyclic_defaults_unchanged_when_coord_residues_absent(tmp_path):
     assert all(r["comment"] == "His-Zn" for r in rows)
 
 
+# ── seq-update: coordinators threaded so post-design identity/chirality is re-imposed ──
+
+def test_cyclic_seq_update_passes_coordinators_and_frozen(monkeypatch):
+    """Cyclic.seq_update must thread the declared coordinators (0-based pos, one_letter) into
+    make_alpha_seq_update_fn so the post-design anchor can re-impose the pinned His identity
+    (GPU-confirmed bug: fixed_mask alone blanked them to D-Ala). frozen_positions stays too."""
+    import xenodesign.classes.alpha as alpha_mod
+
+    captured = {}
+
+    def fake_make(wrapper, **kw):
+        captured.update(kw)
+        return lambda prediction: "stub"
+
+    monkeypatch.setattr(alpha_mod, "make_alpha_seq_update_fn", fake_make)
+
+    c = Cyclic()
+    coords = _coords("H6,DHI12,H18,DHI24")
+    cfg = _cyclic_cfg(**{"restraint.params": {"coord_residues": coords}})
+    c.seq_update(cfg, wrapper=object(), seed_spec=None, roles=None)
+
+    # coordinators: 0-based position + one-letter identity.
+    assert captured["coordinators"] == [(5, "H"), (11, "H"), (17, "H"), (23, "H")]
+    # frozen_positions kept (both mark the positions non-designable; harmless overlap).
+    assert captured["frozen_positions"] == {5, 11, 17, 23}
+
+
 # ── CLI flag plumbing (scripts/design.py) ──────────────────────────────────────────
 
 def test_cli_cys_positions_parsed_into_params():
