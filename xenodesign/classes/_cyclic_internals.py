@@ -310,6 +310,31 @@ def zn_coordination_geometry(zn_pos, nitrogen_positions, cutoff: float = _ZN_N_C
     }
 
 
+def four_his_tetrahedron_score(geom: dict) -> float:
+    """Score a Zn first-shell geometry dict (from ``zn_coordination_geometry``) for how close it is
+    to the ideal 4-coordinate [Zn(His)4] tetrahedron (the 6UFA site). Returns a float in [0, 1]
+    (#5). Two independent factors, multiplied:
+
+      * coordination completeness: ``min(n_coordinating, 4) / 4`` (a 2-His site caps at 0.5).
+      * angular fidelity: ``1 - min(1, |mean_angle - 109.47| / 109.47)`` (1.0 at ideal; degrades as
+        the mean N-Zn-N angle departs from tetrahedral). Missing angle (<2 coordinating Ns) -> 0.
+
+    Pure geometry — feeds the MetalHawk gate's selection tie-break + the panel's metal term. An empty
+    site (n=0) scores 0.0.
+    """
+    n = int(geom.get("n_coordinating", 0) or 0)
+    if n == 0:
+        return 0.0
+    completeness = min(n, 4) / 4.0
+    ang = geom.get("mean_n_zn_n_angle")
+    ideal = float(geom.get("ideal_tetrahedral", 109.47)) or 109.47
+    if ang is None:
+        angular = 0.0
+    else:
+        angular = 1.0 - min(1.0, abs(float(ang) - ideal) / ideal)
+    return float(completeness * angular)
+
+
 # ── CIF parsing helpers for the GPU path (deposit + predicted structures) ───────
 
 _BACKBONE_ATOMS = ("N", "CA", "C", "O")

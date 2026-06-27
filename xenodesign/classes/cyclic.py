@@ -73,6 +73,7 @@ from xenodesign.classes._cyclic_internals import (  # noqa: F401
     build_cyclic_seed,
     combine_intramolecular_terms,
     cyclic_records_from_cif,
+    four_his_tetrahedron_score,
     head_to_tail_closure_geometry_from_cif,
     intramolecular_terms_from_records,
     make_intramolecular_score_fn,
