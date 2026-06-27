@@ -85,6 +85,7 @@ class SequenceUpdater:
         context_coords,
         context_elements: Sequence[str],
         chirality_pattern: Optional[dict] = None,
+        known_seq: Optional[str] = None,
     ) -> SequenceUpdateResult:
         design_backbone = np.asarray(design_backbone, dtype=float)
         flip = choose_reflection(design_codes)
@@ -105,11 +106,11 @@ class SequenceUpdater:
                 fixed or (i in self._frozen_positions) for i, fixed in enumerate(fixed_mask)
             ]
 
-        # B2: feed the backend the REAL (L-projected) sequence as `known_seq`, so it natively
-        # KEEPS the fixed positions (chain_mask=0 there) with their declared identity (a D-His
-        # coordinator -> 'H', NOT the old all-Ala placeholder) and conditions free positions on
-        # real context. The projection is chirality-agnostic, matching the mirror-into-L frame.
-        known_seq = l_projected_known_seq(design_codes)
+        # B2: feed the backend the REAL (L-projected) sequence as `known_seq`. When the caller
+        # supplies an explicit `known_seq` (S2.2: the real ABC identity), use it; otherwise derive
+        # it from design_codes (the historical default). The projection is chirality-agnostic.
+        if known_seq is None:
+            known_seq = l_projected_known_seq(design_codes)
 
         candidates = call_backend(
             self._design_fn,

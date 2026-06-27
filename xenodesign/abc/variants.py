@@ -54,6 +54,24 @@ def _is_path_like(x) -> bool:
     return isinstance(x, (str, os.PathLike))
 
 
+def _context_from_structure(last_structure):
+    """Resolve (context_coords, context_elements) from the candidate's last structure.
+
+    For S2: a CIF path -> the binder chain's all-atom context via _all_atoms_from_chain; anything
+    else (None / a bare backbone array / parse failure) -> empty context (the legacy fallback, so a
+    missing structure never crashes the search). The single-chain mixed-chirality ABC design has no
+    separate target chain, so context here is best-effort; the full target-driven context belongs to
+    S3's restraints/Target-axis unification."""
+    if not _is_path_like(last_structure):
+        return np.zeros((0, 3)), []
+    try:
+        from xenodesign.cif_io import _all_atoms_from_chain
+        ctx_coords, ctx_elements = _all_atoms_from_chain(last_structure, "A")
+        return np.asarray(ctx_coords), list(ctx_elements)
+    except Exception:
+        return np.zeros((0, 3)), []
+
+
 def _backbone_from_cif(cif_path, n: int):  # pragma: no cover (gemmi/gpu path)
     """Best-effort parse a CIF into an ``(n, 4, 3)`` N/CA/C/CB backbone (binder chain 'A')."""
     try:
@@ -73,38 +91,57 @@ def _backbone_from_cif(cif_path, n: int):  # pragma: no cover (gemmi/gpu path)
         return None
 
 
-def abc_variant_a_design_fn(backend):
+def abc_variant_a_design_fn(backend, *, roles=None, frozen=None):
     """Variant A: MPNN fills IDENTITY per chirality pattern (T1 per-position-handed path).
 
-    Returns ``design_fn(identity, chirality_pattern) -> identity`` where the returned identity is
-    the PLAIN one-letter L sequence MPNN designed (NOT a ``(DXX)``-encoded FASTA). The engine
-    carries identity as a plain sequence and the fitness adapter applies the per-position-handed
-    ``mixed_chirality_fasta`` emit itself — returning a parenthesized FASTA here would be
-    double-encoded by the fitness (``mixed_chirality_fasta('(DAL)...')`` → KeyError) and the
-    candidate would always evaluate to ``-inf``, freezing the search on the warm-start seed.
+    Returns ``design_fn(identity, chirality_pattern) -> identity`` (the PLAIN one-letter L seq;
+    the fitness adapter applies the per-position mixed_chirality_fasta emit). ``backend`` is an
+    InverseFoldingBackend (the coordinate-only LigandMPNN adapter in production; a fake in tests).
 
-    ``backend`` is an ``InverseFoldingBackend`` (the coordinate-only LigandMPNN adapter in
-    production; a fake in tests). The engine threads the candidate's last predicted structure in
-    via the optional ``last_structure`` kwarg (FIX 1, ABC pilot 2026-06-25): MPNN re-designs
-    identity on the REAL backbone, not a structure-blind zero placeholder (which froze the search
-    on the seed). ``last_structure`` may be an ``(n, 4, 3)`` backbone array (N, CA, C, CB) or a CIF
-    path; ``None`` (warm-start / first eval, before any structure exists) keeps the prior
-    zero-backbone behaviour. Per-position-handed ``design_codes`` (D→a D code, L→an L code) still
-    drive ``choose_reflection`` into the majority frame so the searched handedness is preserved.
+    S2.2 (SequenceUpdate routing, flag-on): when ``XENO_SEQ_STAGE != "0"``, the REAL evolving
+    ``identity`` is fed to the backend as ``known_seq`` (built via ``SequenceUpdate.build_known_seq``
+    so declared-coordinator ``frozen`` positions keep their identity) — replacing the legacy
+    all-Ala ``design_codes`` starvation (variants.py:104-106) — and the candidate's real backbone +
+    ligand/Zn context are resolved from ``last_structure`` (the CIF the fitness publishes) instead
+    of the legacy empty context (variants.py:111-112). Flag off => the legacy all-Ala/empty-context
+    body, byte-identical. ``roles``/``frozen`` are only consulted on the flag-on path.
     """
+    import os
+
     from xenodesign.sequence_update import SequenceUpdater
 
-    updater = SequenceUpdater(design_fn=backend)
+    updater = SequenceUpdater(design_fn=backend,
+                              frozen_positions=set(frozen) if frozen else None)
+    routed = os.environ.get("XENO_SEQ_STAGE", "0") != "0"
+    stage = None
+    if routed:
+        from xenodesign.seq_stage import SequenceUpdate
+        stage = SequenceUpdate(roles=roles, frozen=set(frozen or ()))
 
     def design_fn(identity: str, chirality_pattern: Mapping[int, str],
                   last_structure=None) -> str:
         n = len(chirality_pattern)
-        # Per-position-handed design codes so choose_reflection lands in the majority frame and
-        # the searched handedness is preserved by the chirality_pattern emit.
+        # Per-position-handed design codes so choose_reflection lands in the majority frame and the
+        # searched handedness is preserved by the chirality_pattern emit.
         design_codes = [
             "DAL" if chirality_pattern[i] == "D" else "ALA" for i in range(n)
         ]
         design_backbone = _resolve_design_backbone(last_structure, n)
+        if routed:
+            # Invariant #1: known_seq is the REAL evolving identity (frozen positions pinned).
+            known = stage.build_known_seq(prev_l_seq=identity[:n].ljust(n, "A"))
+            # Real ligand/Zn context from the candidate CIF (S2 scope: the seq-update needs the
+            # context so MPNN conditions free positions on the real interface, not empty arrays).
+            ctx_coords, ctx_elements = _context_from_structure(last_structure)
+            result = updater.update(
+                design_backbone=design_backbone,
+                design_codes=design_codes,
+                context_coords=ctx_coords,
+                context_elements=ctx_elements,
+                chirality_pattern=dict(chirality_pattern),
+                known_seq=known,
+            )
+            return result.one_letter
         result = updater.update(
             design_backbone=design_backbone,
             design_codes=design_codes,
