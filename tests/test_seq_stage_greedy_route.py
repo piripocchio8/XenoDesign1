@@ -12,6 +12,8 @@ class _Wrapper:
 
 
 def test_make_alpha_seq_update_routes_through_stage(monkeypatch):
+    # Flag must be ON to exercise the stage path (default is OFF = legacy).
+    monkeypatch.setenv("XENO_SEQ_STAGE", "1")
     seen = {}
     real = ai.SequenceUpdate.build_loop_fn
 

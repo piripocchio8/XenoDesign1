@@ -122,7 +122,12 @@ class SequenceUpdate:
                                                     chirality_pattern=chirality_pattern)
             if chirality_pattern is None:
                 return anchored
-            return self.encode_d_fasta(anchored, chirality_pattern=chirality_pattern)
+            # Densify free positions to "D" (the historical all-D cyclic default) before
+            # encode_d_fasta so absent positions are not silently treated as L by
+            # mixed_chirality_fasta. Mirrors the legacy _extract densification at
+            # _alpha_internals.py:538-541. Do NOT change encode_d_fasta's own default.
+            dense = {i: chirality_pattern.get(i, "D") for i in range(len(anchored))}
+            return self.encode_d_fasta(anchored, chirality_pattern=dense)
 
         return _fn
 

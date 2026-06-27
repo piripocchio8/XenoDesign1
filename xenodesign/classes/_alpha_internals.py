@@ -454,10 +454,10 @@ def make_alpha_seq_update_fn(wrapper: _LoopBackendWrapper, num_seqs: int = _DEFA
     binder_chain = roles.binder if roles is not None else "B"
     context_chain = roles.context if roles is not None else "A"
 
-    # S1.7: route through SequenceUpdate when XENO_SEQ_STAGE != "0" (default on).
+    # S1.7: route through SequenceUpdate when XENO_SEQ_STAGE != "0" (default OFF = legacy).
     # The legacy inline _extract body below is the UNCHANGED "0" fallback — flag off = byte-identical.
     import os
-    if os.environ.get("XENO_SEQ_STAGE", "1") != "0":
+    if os.environ.get("XENO_SEQ_STAGE", "0") != "0":
         # Build FrozenPosition set from declared coordinators (for cyclic-metal chirality threading).
         frozen = set()
         for pos0, one_letter in (coordinators or ()):
