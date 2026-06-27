@@ -388,21 +388,59 @@ def greedy_iptm_accept(
 
 
 def alpha_demote_gated_accept(
+    panel,
     max_helix_frac: float = 0.5,
 ) -> Callable[["LoopStep", "LoopStep"], bool]:
     """Factory for an ANTI-alpha (knottin / non_alpha) acceptance gate.
 
     Returns ``accept_fn(candidate_step, current_step) -> bool`` that REJECTS a candidate whose
     predicted binder helix fraction exceeds ``max_helix_frac`` — a knottin design that came out
-    over-helical is off-target. The helix fraction is read from
-    ``candidate_step.prediction.helix_fraction`` (the same forward CA-geometry helix the panel's
-    SS-bias term uses). An unreadable/missing helix is treated as register-achievable (accept) so a
+    over-helical is off-target.
+
+    The helix fraction is sourced from ``RefereeScore.helix_fraction`` via the panel's
+    ``score_fn``, exactly mirroring ``chirality_gated_accept``.  The production ``Prediction``
+    object has NO ``helix_fraction`` field; helix is computed by the alpha score_fn and stored on
+    the ``RefereeScore`` it returns — so reading it from ``prediction`` directly is always a no-op.
+
+    An unreadable/missing helix (``None`` from the score_fn) is treated as acceptable so a
     parse failure never silently kills a trajectory — the gate only rejects a candidate it can
     positively prove is too helical (symmetry with ``periodicity_gated_accept``).
+
+    Args:
+        panel: A ``xenodesign.judges.panel.JudgePanel`` instance configured with a
+               ``score_fn`` callable so it can extract ``RefereeScore`` from a step.
+               The gate calls ``panel._score_fn(candidate_step)`` to obtain the score, then
+               reads ``RefereeScore.helix_fraction`` from the result.
+        max_helix_frac: Helix fraction above which (strictly greater) the candidate is
+               hard-rejected (default 0.5 — knottins should be sub-50 % helical).
+
+    Example::
+
+        from xenodesign.judges.panel import JudgePanel, RefereeScore
+        from xenodesign.loop import HalluLoop, alpha_demote_gated_accept
+
+        def my_score_fn(step):
+            return RefereeScore(
+                chirality_violation=step.prediction.chirality_violation_frac,
+                iptm=step.prediction.iptm,
+                helix_fraction=step.prediction.helix_frac,   # CIF-computed by alpha scorer
+            )
+
+        panel = JudgePanel(score_fn=my_score_fn)
+        gate  = alpha_demote_gated_accept(panel, max_helix_frac=0.5)
+        history = loop.run(init, iterations=30, ref_time_steps=50,
+                           out_dir=out_dir, accept_fn=gate)
     """
+    if panel._score_fn is None:
+        raise ValueError(
+            "alpha_demote_gated_accept requires a JudgePanel with score_fn set. "
+            "Pass score_fn=(step)->RefereeScore when constructing JudgePanel."
+        )
+
     def _gate(candidate_step: "LoopStep", current_step: "LoopStep") -> bool:
-        pred = getattr(candidate_step, "prediction", None)
-        helix = getattr(pred, "helix_fraction", None)
+        # Score the candidate with the panel's score_fn to get the RefereeScore.
+        cand_ref = panel._score_fn(candidate_step)
+        helix = getattr(cand_ref, "helix_fraction", None)
         if helix is None:
             return True
         if float(helix) > max_helix_frac:
