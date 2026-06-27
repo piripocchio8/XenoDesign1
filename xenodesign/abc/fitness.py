@@ -128,7 +128,19 @@ def make_abc_fitness(
             import os
             seq_for_emit = sequence
             if os.environ.get("XENO_SEQ_STAGE", "0") != "0":
+                from xenodesign.abc.moves import identity_tokens
+                from xenodesign.io_spec import AA1_TO_AA3
                 from xenodesign.seq_stage import SequenceUpdate
+                # Validate raw tokens BEFORE the anchor can silently convert an unknown residue
+                # (e.g. 'Z') to 'G', which would turn an invalid-sequence failure into a success
+                # and leave last_structure set on what should be a failed eval. The anchor's job
+                # is to ensure >=1 canonical residue in a valid all-D chain — not to rescue
+                # unknown letters. Raise here so the except block clears last_structure properly.
+                for _tok in identity_tokens(sequence):
+                    if not _tok.startswith("(") and _tok not in AA1_TO_AA3:
+                        raise KeyError(
+                            f"unknown amino-acid letter {_tok!r} in sequence {sequence!r}"
+                        )
                 seq_for_emit = SequenceUpdate().ensure_canonical_anchor(
                     sequence, chirality_pattern=dict(chirality_pattern))
             # Per-position-handedness emit (T1): 0-based pattern → 1-based for mixed_chirality_fasta.
