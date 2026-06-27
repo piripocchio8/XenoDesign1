@@ -149,6 +149,102 @@ def test_cyclic_referee_is_noop():
     assert ref("step", 0) is None
 
 
+# ── Part E: achiral Gly anchor for all-one-handedness designs ──────────────────
+
+def test_anchor_forced_cterm_for_all_d_design():
+    """All-D design + all-D coordinators: among NON-coordinator positions there is no L,
+    so an achiral Gly must be ensured AT THE C-TERMINUS (last non-coordinator position)."""
+    one = "AAAAHH"          # H@5,H@6 are coordinators
+    fixed = {5: "D", 6: "D"}  # coordinators are D-handed
+    out = Cyclic._ensure_canonical_anchor(one, fixed, default_chirality="D")
+    assert "G" in out
+    # C-terminal non-coordinator position is index 3 (1-based 4); 5,6 are pinned coordinators.
+    assert out == "AAAGHH"
+    # coordinators are never overwritten
+    assert out[4] == "H" and out[5] == "H"
+
+
+def test_anchor_noop_when_glycine_present():
+    """A design already containing a Gly is unchanged (the anchor already exists)."""
+    one = "AAGAHH"
+    fixed = {5: "D", 6: "D"}
+    out = Cyclic._ensure_canonical_anchor(one, fixed, default_chirality="D")
+    assert out == one
+
+
+def test_anchor_not_forced_for_genuinely_mixed_design():
+    """A genuinely mixed L/D design (both handedness present among non-coordinators) needs no
+    forced Gly: chai can tokenize the L residues, so the all-one-handedness trigger is off."""
+    one = "AAAAHH"
+    fixed = {5: "D", 6: "D"}  # coordinators only
+    # Non-coordinator handedness: pos 1='L', pos 2='D' -> both present among non-coords.
+    chir = {1: "L", 2: "D"}
+    out = Cyclic._ensure_canonical_anchor(one, fixed, chirality_map=chir,
+                                          default_chirality="D")
+    assert "G" not in out
+    assert out == one
+
+
+# ── Part G: MetalHawk post-selection verification (recorded, not a hard gate) ──
+
+def _fake_history(d_fasta="H(DHI)", iptm=0.42, ptm=0.55, score=0.42):
+    class _Pred:
+        pass
+    p = _Pred()
+    p.iptm, p.ptm = iptm, ptm
+
+    class _State:
+        pass
+    s = _State()
+    s.d_fasta = d_fasta
+
+    class _Step:
+        pass
+    step = _Step()
+    step.prediction, step.state, step.score = p, s, score
+    return [step]
+
+
+def test_metal_geometry_recorded_for_metal_target(tmp_path, monkeypatch):
+    """When the target is a metal, _assemble_cyclic_result runs the (reused) metal_geometry_gate
+    on the SELECTED CIF and records geometry+perplexity+passed into the result dict."""
+    import xenodesign.classes.cyclic as cyc
+    from xenodesign.eval.metal_geometry_gate import GateResult
+
+    calls = []
+
+    def _fake_gate(cif_path, **kw):
+        calls.append(cif_path)
+        return GateResult(geometry="TET", perplexity=1.2, passed=True, ok=True)
+
+    monkeypatch.setattr(cyc, "metal_geometry_gate", _fake_gate)
+    cfg = resolve_config("cyclic", target_type="metal", out_dir=str(tmp_path))
+    case = get_case("cyclic")
+    result = cyc._assemble_cyclic_result(cfg, _fake_history(), panel_result=None,
+                                         case=case, out_dir=tmp_path)
+    assert calls, "metal_geometry_gate must be called for a metal target"
+    assert result["metal_geometry"]["geometry"] == "TET"
+    assert result["metal_geometry"]["perplexity"] == 1.2
+    assert result["metal_geometry"]["passed"] is True
+
+
+def test_metal_geometry_skipped_for_non_metal(tmp_path, monkeypatch):
+    """No-target (target_type='none'): no metal site, so the gate is never called and the
+    metal_geometry field is absent."""
+    import xenodesign.classes.cyclic as cyc
+
+    called = []
+    monkeypatch.setattr(cyc, "metal_geometry_gate",
+                        lambda *a, **k: called.append(True))
+    cfg = resolve_config("cyclic", target_type="none", out_dir=str(tmp_path),
+                         cli_overrides={"use_pepmlm": False})
+    case = get_case("cyclic")
+    result = cyc._assemble_cyclic_result(cfg, _fake_history(), panel_result=None,
+                                         case=case, out_dir=tmp_path)
+    assert not called, "metal_geometry_gate must NOT be called for a non-metal target"
+    assert "metal_geometry" not in result
+
+
 def test_cyclic_report_assembles_result_dict(tmp_path):
     c = Cyclic()
     cfg = resolve_config("cyclic", target_type="metal", out_dir=str(tmp_path))

@@ -225,3 +225,43 @@ def test_write_cyclic_restraints_closure_appends_one_covalent(tmp_path):
     n_closed = sum(1 for _ in closed.read_text().splitlines()[1:])
     assert n_closed == n_base + 1                                  # exactly one closure bond
     assert "covalent" in closed.read_text() and "cyclic_closure" in closed.read_text()
+
+
+# ── Part F: result provenance — recorded sequence must match the PANEL-selected step ──
+
+def test_assemble_records_panel_selected_sequence_not_greedy(tmp_path):
+    """The recorded selected_d_fasta must come from the PANEL-selected step (whose CIF is the
+    deposited model), NOT the greedy highest-score step — mirroring the alpha path. Here the
+    greedy best (highest score) is step 0, but the panel selects step 1."""
+    from xenodesign.classes.cyclic import _assemble_cyclic_result
+    from xenodesign.config import resolve_config
+    from xenodesign.judges.panel import PanelResult, RefereeScore
+
+    class _Pred:
+        def __init__(self, iptm, ptm):
+            self.iptm, self.ptm = iptm, ptm
+
+    class _State:
+        def __init__(self, d_fasta):
+            self.d_fasta = d_fasta
+
+    class _Step:
+        def __init__(self, d_fasta, iptm, ptm, score):
+            self.prediction = _Pred(iptm, ptm)
+            self.state = _State(d_fasta)
+            self.score = score
+
+    # step 0 has the HIGHER score (greedy would pick it); step 1 is the panel pick.
+    history = [_Step("(DHI)GREEDY", 0.9, 0.9, 0.99),
+               _Step("(DHI)PANEL", 0.5, 0.5, 0.10)]
+    raw = [RefereeScore(chirality_violation=0.0, iptm=0.9),
+           RefereeScore(chirality_violation=0.0, iptm=0.5)]
+    panel = PanelResult(selected_idx=1, composite_scores=[0.1, 0.9],
+                        vetoed=[False, False], raw_scores=raw)
+
+    cfg = resolve_config("cyclic", target_type="metal", out_dir=str(tmp_path))
+    case = get_case("cyclic")
+    result = _assemble_cyclic_result(cfg, history, panel_result=panel,
+                                     case=case, out_dir=tmp_path)
+    assert result["selected_d_fasta"] == "(DHI)PANEL"
+    assert result["selected_iptm"] == 0.5  # ipTM read from the SAME (panel) step

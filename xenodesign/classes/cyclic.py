@@ -47,6 +47,7 @@ from xenodesign.benchmark.cases import get_case
 from xenodesign.benchmark.restraints import build_for_case, write_restraints
 from xenodesign.benchmark.seeding import _CYCLIC_HIS_CHIRALITY, build_seed_for_case
 from xenodesign.classes.base import SeedSpec
+from xenodesign.eval.metal_geometry_gate import metal_geometry_gate
 from xenodesign.geometry import kabsch_rmsd
 from xenodesign.io_spec import AA1_TO_AA3
 from xenodesign.mirror import L_TO_D
@@ -644,7 +645,21 @@ def _assemble_cyclic_result(cfg, history, panel_result, case, out_dir,
     (no CIF parsed); the GPU smoke (T10) populates them from the predicted structure."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    best = _best_step(history) if history else None
+
+    # PROVENANCE (Part F): record the PANEL-selected step (whose per-iteration CIF is the model
+    # the dispatcher deposits as the result, ``loop/iter_{sel_idx:03d}``), mirroring the alpha
+    # path's ``panel_result.selected_idx`` selection. Fall back to the greedy best() only when no
+    # panel result with a valid index is available, so the recorded sequence always matches the
+    # deposited CIF.
+    sel_idx = None
+    if panel_result is not None:
+        idx = getattr(panel_result, "selected_idx", None)
+        if idx is not None and history and 0 <= int(idx) < len(history):
+            sel_idx = int(idx)
+    if sel_idx is not None:
+        best = history[sel_idx]
+    else:
+        best = _best_step(history) if history else None
     pred = getattr(best, "prediction", None) if best is not None else None
 
     result = {
@@ -667,6 +682,25 @@ def _assemble_cyclic_result(cfg, history, panel_result, case, out_dir,
         "phase": "linear+emergent-closure (mainchain head-to-tail closure opt-in)",
         "out_dir": str(out_dir),
     }
+
+    # POST-SELECTION VERIFICATION (Part G): for a METAL target, run the EXISTING best-effort
+    # metal-geometry gate on the SELECTED CIF and RECORD (never enforce) its verdict. Not a hard
+    # loop gate — purely a recorded check. Skipped for non-metal / no-target (no metal site).
+    if cfg.target.target_type == "metal":
+        sel = sel_idx if sel_idx is not None else 0
+        iter_dir = out_dir / "loop" / f"iter_{sel:03d}"
+        try:
+            from scripts.design_demo import _best_cif_path
+            cif_path = _best_cif_path(iter_dir)
+        except Exception:
+            cif_path = iter_dir  # best-effort: the gate never raises (pass-through on a non-CIF)
+        gate = metal_geometry_gate(cif_path)
+        result["metal_geometry"] = {
+            "geometry": gate.geometry,
+            "perplexity": gate.perplexity,
+            "passed": bool(gate.passed),
+        }
+
     (out_dir / "cyclic_result.json").write_text(
         json.dumps(result, indent=2,
                    default=lambda o: getattr(o, "tolist", lambda: str(o))()))
@@ -876,21 +910,35 @@ class Cyclic:
         return "".join(chars)
 
     @staticmethod
-    def _ensure_canonical_anchor(one_letter: str, fixed: "dict | None") -> str:
-        """Gly-guard the from-scratch no-target free-cyclic seed (#9).
+    def _ensure_canonical_anchor(one_letter: str, fixed: "dict | None",
+                                 chirality_map: "dict | None" = None,
+                                 *, default_chirality: str = "D") -> str:
+        """Gly-guard the from-scratch cyclic seed when it is otherwise all-one-handedness (#9, Part E).
 
-        chai needs >=1 canonical residue per chain to tokenize; an all-D peptide is fully
-        non-canonical, so a glycine-free all-D free-cyclic seed crashes at iter_000 (ADR-004).
-        The alpha (``_ensure_cterm_glycine``) and non_alpha (``_ensure_glycine``) seeds are already
-        Gly-guarded; this mirrors them for the cyclic seed. If a glycine already exists anywhere
-        (canonical anchor present), it's a no-op. Otherwise force a single 'G' at the most central
-        position NOT pinned by ``fixed`` (so a coordinating His is never clobbered)."""
+        chai needs >=1 canonical residue per chain to tokenize; a chain that is ENTIRELY one
+        handedness (e.g. all-D) is fully non-canonical and crashes at iter_000 (ADR-004). A
+        genuinely MIXED L/D design already carries tokenizable L residues, so it needs no anchor.
+
+        Rule (Part E): ensure an achiral Gly when, among the NON-coordinator positions, there is
+        NO D-residue OR NO L-residue present (i.e. the design is otherwise all-one-handedness) AND
+        no Gly already exists. The Gly is placed at the C-TERMINUS (last non-coordinator position),
+        never overwriting a declared coordinator. ``fixed`` keys are the 1-based coordinator
+        positions; non-coordinator handedness is read from ``chirality_map`` (positions absent
+        default to ``default_chirality`` — the cyclic backbone is encoded uniformly all-D in the
+        no-target path, L in the mixed-metal path)."""
         if "G" in one_letter:
             return one_letter
         n = len(one_letter)
-        pinned = {int(p) for p in (fixed or {})}  # 1-based pinned positions to avoid
-        order = sorted(range(n), key=lambda i: abs(i - n // 2))  # central-out (mirror non_alpha)
-        for i in order:
-            if (i + 1) not in pinned:
-                return one_letter[:i] + "G" + one_letter[i + 1:]
+        pinned = {int(p) for p in (fixed or {})}  # 1-based coordinator positions
+        chir = dict(chirality_map or {})
+        non_coord = [i for i in range(n) if (i + 1) not in pinned]
+        hands = {chir.get(i + 1, default_chirality) for i in non_coord}
+        # Mixed (both 'D' and 'L' present among non-coordinators): chai can tokenize the L
+        # residues, so no forced Gly is needed.
+        if "D" in hands and "L" in hands:
+            return one_letter
+        # All-one-handedness: place the achiral anchor at the C-TERMINAL non-coordinator position.
+        if non_coord:
+            i = non_coord[-1]
+            return one_letter[:i] + "G" + one_letter[i + 1:]
         return one_letter  # pragma: no cover (every position pinned — impossible for real lengths)
