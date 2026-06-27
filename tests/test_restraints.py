@@ -114,9 +114,13 @@ def test_metal_coordination_one_row_per_his():
     assert rows[3] == 'A,H11,B,X1,contact,0.8,0.0,2.6,His-Zn,zn_coord_11'
 
 
-def test_metal_coordination_emits_covalent_when_atoms_present():
-    # Coordinators carrying liganding atoms -> BOTH a residue-level CONTACT row AND an
-    # atom-level COVALENT row per coordinator (atom-specific metal coordination).
+def test_metal_coordination_contact_only_by_default_even_with_atoms():
+    # FIX A (stopgap): a covalent-to-metal row makes chai's
+    # get_atom_covalent_bond_pairs_from_constraints assert (the metal one-letter 'X'@ZN does
+    # not resolve), crashing the run. So even when coordinators carry liganding atoms, the
+    # DEFAULT emission is residue-level CONTACT ONLY (which apply via the position-only
+    # token_dist patch). The coordinator atom is RETAINED in the data for a future patch, but
+    # NO covalent-to-metal row is emitted unless explicitly opted in.
     rows = metal_coordination_rows({
         'metal_chain': 'B', 'metal_resnum': 1, 'metal_atom': 'ZN',
         'coord_chain': 'A',
@@ -125,9 +129,25 @@ def test_metal_coordination_emits_covalent_when_atoms_present():
     })
     contacts = [r for r in rows if ',contact,' in r]
     covalents = [r for r in rows if ',covalent,' in r]
-    assert len(contacts) == 2 and len(covalents) == 2
-    # residue-level contact (robust distance bias) unchanged: 'H6'/'X1'.
+    assert len(contacts) == 2 and len(covalents) == 0
+    # residue-level contact (robust distance bias): 'H6'/'X1'.
     assert contacts[0].split(',')[1] == 'H6' and contacts[0].split(',')[3] == 'X1'
+    assert contacts[1].split(',')[1] == 'H12' and contacts[1].split(',')[3] == 'X1'
+
+
+def test_metal_coordination_emits_covalent_only_when_flag_explicitly_on():
+    # The covalent-to-metal path still exists but is OFF by default; it appears ONLY when
+    # metal_covalent_atoms=True is explicitly passed (a future patch will make this safe).
+    rows = metal_coordination_rows({
+        'metal_chain': 'B', 'metal_resnum': 1, 'metal_atom': 'ZN',
+        'coord_chain': 'A',
+        'coord_residues': [(6, 'H', 'HIS', 'L', 'ND1'), (12, 'H', 'DHI', 'D', 'ND1')],
+        'max_distance': 2.6, 'confidence': 0.8,
+        'metal_covalent_atoms': True,
+    })
+    contacts = [r for r in rows if ',contact,' in r]
+    covalents = [r for r in rows if ',covalent,' in r]
+    assert len(contacts) == 2 and len(covalents) == 2
     # atom-level covalent: binder 'H6@ND1' <-> metal 'X1@ZN'.
     c0 = covalents[0].split(',')
     assert c0[0] == 'A' and c0[1] == 'H6@ND1'
@@ -189,11 +209,13 @@ def test_build_cyclic_restraint_rows_preserves_atom_and_chirality():
                                        coord_residues=coords)
     contacts = [r for r in rows if ',contact,' in r]
     covalents = [r for r in rows if ',covalent,' in r]
-    # atom-level covalent rows must now emit (the truncation killed them before).
-    assert len(contacts) == 2 and len(covalents) == 2
-    # The liganding atom (ND1) survived into the covalent token.
-    assert covalents[0].split(',')[1] == 'H6@ND1'
-    assert covalents[1].split(',')[1] == 'H12@ND1'  # D coordinator emits its covalent row too
+    # FIX A: covalent-to-metal is OFF by default (it crashes Chai), so the builder emits
+    # CONTACT rows only. The full tuple (incl. atom + chirality) is still threaded through
+    # (a future patch will consume the retained atom), but no metal covalent rows emit here.
+    assert len(contacts) == 2 and len(covalents) == 0
+    # The declared D coordinator's identity is preserved in the contact rows.
+    assert contacts[0].split(',')[1] == 'H6'
+    assert contacts[1].split(',')[1] == 'H12'
 
 
 def test_build_for_case_nonalpha_shell_raises_pending_gate():

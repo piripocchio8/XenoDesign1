@@ -185,11 +185,15 @@ def metal_coordination_rows(params: dict) -> list:
         only when ``coord_residues`` is absent (the case default).
 
     ATOM-SPECIFIC coordination (#1b): when a coordinator carries a liganding atom (the 5th tuple
-    element, e.g. 'ND1'/'SG') AND ``metal_covalent_atoms`` is set (defaults True when ANY
-    coordinator has an atom), each such coordinator ALSO emits an atom-level COVALENT row binding
-    the coordinator atom to the metal atom (``metal_atom``, default 'ZN'). The residue-level
-    CONTACT row is ALWAYS kept (robust distance bias). With NO atoms, behavior is unchanged
-    (pure contact)."""
+    element, e.g. 'ND1'/'SG'), the atom is RETAINED in ``items`` (a future patch will consume it),
+    but emitting an atom-level COVALENT bond to the metal is OFF BY DEFAULT
+    (``metal_covalent_atoms=False``). FIX A (stopgap): a covalent-to-metal row makes chai's
+    ``get_atom_covalent_bond_pairs_from_constraints`` assert (the metal one-letter 'X'@ZN does not
+    resolve through the L-only name table), which CRASHES the run — GPU-confirmed. The residue-level
+    CONTACT row alone drives coordination correctly via the position-only ``token_dist`` patch. The
+    covalent-to-metal row is emitted ONLY when ``metal_covalent_atoms=True`` is passed explicitly
+    (kept for a future patch that resolves the metal atom safely). With NO atoms, behavior is
+    unchanged (pure contact)."""
     metal_chain = params['metal_chain']
     metal_resnum = params['metal_resnum']
     coord_chain = params.get('his_chain') or params.get('coord_chain')
@@ -208,8 +212,10 @@ def metal_coordination_rows(params: dict) -> list:
             raise ValueError('metal_coordination_rows: no coord_residues or his_resnums provided')
         # Legacy His-only path: identity 'H', no atom, original 'His-Zn'/'zn_coord_<pos>'.
         items = [(int(hr), 'H', None, 'His-Zn', f'zn_coord_{int(hr)}') for hr in his_resnums]
-    # Default the covalent-atom flag ON when any coordinator declared a liganding atom.
-    emit_covalent = params.get('metal_covalent_atoms', any(atom for _, _, atom, _, _ in items))
+    # FIX A: covalent-to-metal emission is OFF by default (it crashes Chai's covalent-bond
+    # builder — the metal one-letter 'X'@ZN never resolves). The coordinator atom stays in
+    # ``items`` for a future patch; the bond only emits when explicitly opted in.
+    emit_covalent = bool(params.get('metal_covalent_atoms', False))
     rows = []
     for pos, one_letter, atom, comment, rid in items:
         rows.append(contact_row(

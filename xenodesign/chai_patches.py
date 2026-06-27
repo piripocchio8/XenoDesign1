@@ -187,6 +187,30 @@ def _covalent_name_candidates(one_letter):
     return candidates
 
 
+# Backbone heavy atoms present for EVERY residue identity, regardless of L/D or side chain.
+# A covalent bond on these (the head-to-tail closure C->N) is identity-independent, so its
+# residue-NAME guard must be skipped: it resolves by POSITION only.
+_COVALENT_BACKBONE_ATOMS = frozenset({"N", "CA", "C", "O"})
+
+
+def _covalent_match_by_name(atom_name, residue_one_letter) -> bool:
+    """Whether a COVALENT bond endpoint should still match the residue NAME, or resolve by
+    POSITION only (FIX B8).
+
+    Pure logic shared by the patched bond builder and the CPU unit test. The head-to-tail
+    CLOSURE bond (``<Cterm>@C -> <Nterm>@N``) is built from the SEED termini one-letter codes;
+    during the greedy loop MPNN changes residue 1's identity, so the seed-based name goes STALE.
+    But the closure targets BACKBONE atoms (carbonyl C of the last residue, amide N of the
+    first), which exist for ANY residue identity — so its resolution must NOT depend on the
+    (now-stale) residue name. Returns False (skip the name guard, resolve by position) when the
+    atom is a backbone atom, OR when no residue name is supplied. Side-chain atoms (SG, ND1, ...)
+    keep the name guard (return True) so disulfides / side-chain bonds stay pinned to the right
+    residue identity."""
+    if not residue_one_letter:
+        return False
+    return atom_name not in _COVALENT_BACKBONE_ATOMS
+
+
 def _patch_covalent_bond_match() -> None:  # pragma: no cover (gpu import)
     """Let chai 0.6.1 create COVALENT bonds whose endpoints are D-residues (idempotent).
 
@@ -241,11 +265,16 @@ def _patch_covalent_bond_match() -> None:  # pragma: no cover (gpu import)
             left_idx_mask = token_residue_index == constraint.res_idxA_pos - 1
             right_idx_mask = token_residue_index == constraint.res_idxB_pos - 1
             assert torch.any(left_idx_mask) and torch.any(right_idx_mask)
+            # FIX B8: for a BACKBONE-atom covalent bond (the head-to-tail closure C->N), resolve
+            # by POSITION only — skip the residue-name guard. The closure row carries the SEED
+            # termini one-letter codes, which go stale once the loop's MPNN changes a terminus
+            # identity; backbone N/C exist for any identity, so the name must be irrelevant.
+            # Side-chain bonds (SG disulfides, ND1 coordination) still match the name.
             left_residue_mask = left_asym_mask & left_idx_mask
-            if constraint.res_idxA_name:
+            if _covalent_match_by_name(constraint.atom_nameA, constraint.res_idxA_name):
                 left_residue_mask &= _name_mask(constraint.res_idxA_name, token_residue_name)
             right_residue_mask = right_asym_mask & right_idx_mask
-            if constraint.res_idxB_name:
+            if _covalent_match_by_name(constraint.atom_nameB, constraint.res_idxB_name):
                 right_residue_mask &= _name_mask(constraint.res_idxB_name, token_residue_name)
             left_residue_idx = torch.where(left_residue_mask)[0]
             right_residue_idx = torch.where(right_residue_mask)[0]

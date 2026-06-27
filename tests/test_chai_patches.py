@@ -160,3 +160,51 @@ def test_covalent_name_candidates_accepts_d_synonym(monkeypatch):
     assert _covalent_name_candidates("A") == {"ALA", "DAL"}
     # An unmapped code falls back to UNK (and UNK has no D synonym).
     assert _covalent_name_candidates("Z") == {"UNK"}
+
+
+# ── FIX B8: head-to-tail CLOSURE resolves POSITION-ONLY (identity-independent) ──────
+#
+# The closure covalent bond <Cterm>@C -> <Nterm>@N targets BACKBONE atoms (the carbonyl C of
+# the last residue, the amide N of the first), which exist for ANY residue identity. The row's
+# one-letter codes come from the SEED termini; during the greedy loop MPNN changes residue 1's
+# identity, so the seed-based name (e.g. 'R1') goes stale. A backbone-atom covalent bond must
+# therefore resolve by POSITION only — the residue-name guard must be SKIPPED for it, so a stale
+# terminus name does not drop/crash the closure.
+
+def test_covalent_match_by_name_skips_backbone_atoms():
+    """Backbone atoms (N/C/CA/O) exist for every residue identity -> a covalent bond on them
+    resolves POSITION-ONLY (no residue-name guard). Side-chain atoms keep the name guard."""
+    from xenodesign.chai_patches import _covalent_match_by_name
+
+    # Head-to-tail closure backbone atoms: name guard OFF (position-only), even with a name.
+    assert _covalent_match_by_name("C", "R") is False
+    assert _covalent_match_by_name("N", "K") is False
+    assert _covalent_match_by_name("CA", "H") is False
+    assert _covalent_match_by_name("O", "H") is False
+    # Side-chain liganding/disulfide atoms: name guard preserved when a name is present.
+    assert _covalent_match_by_name("SG", "C") is True
+    assert _covalent_match_by_name("ND1", "H") is True
+    # No residue name at all -> nothing to match against (position-only) regardless of atom.
+    assert _covalent_match_by_name("SG", "") is False
+    assert _covalent_match_by_name("SG", None) is False
+
+
+def test_closure_resolves_when_terminus_identity_drifts_from_seed():
+    """The crux of FIX B8: a head-to-tail closure row built from the SEED termini (e.g. 'R1',
+    'H12') must still resolve when MPNN has CHANGED residue 1's identity in the loop (so the
+    seed-based name is now STALE). Because the closure uses the backbone N/C atoms,
+    _covalent_match_by_name returns False for both ends -> the residue-name guard is skipped, so
+    the stale name is irrelevant and the bond resolves by position. (Contrast: a side-chain
+    disulfide WOULD still require the name to match.)"""
+    from xenodesign.chai_patches import _covalent_match_by_name
+
+    # Closure row built from a seed where residue 1 was 'R' (Arg); MPNN later made it 'D' (Asp).
+    seed_n_term_one_letter = "R"   # stale seed identity baked into the closure row
+    closure_atom_n = "N"           # backbone amide N of residue 1
+    closure_atom_c = "C"           # backbone carbonyl C of residue L
+    # Both ends are backbone atoms -> name guard skipped on BOTH ends regardless of the (stale)
+    # one-letter code -> resolution does NOT depend on the seed identity matching the live one.
+    assert _covalent_match_by_name(closure_atom_n, seed_n_term_one_letter) is False
+    assert _covalent_match_by_name(closure_atom_c, "H") is False
+    # Sanity: were the closure (wrongly) a side-chain bond, the stale name WOULD gate it.
+    assert _covalent_match_by_name("SG", seed_n_term_one_letter) is True
