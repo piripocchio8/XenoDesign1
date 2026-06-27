@@ -84,6 +84,31 @@ def top_ncaa(n: int, csv_path: str | Path | None = None) -> list[str]:
     return [code for code, _parent, _count in load_mondet(csv_path)[: max(0, int(n))]]
 
 
+def ncaa_codes(
+    csv_path: str | Path | None = None,
+    *,
+    exclude: set[str] | None = None,
+) -> list[str]:
+    """MONDE-T ``component_id``s ranked by entity_count desc, with ``exclude`` codes filtered out.
+
+    Used to rank ONLY the true non-canonical residues: pass the 20 L + D canonical codes as
+    ``exclude`` so the canonical amino acids (which dominate the raw ranking) never consume the
+    ``--ncaa_top_x`` budget. Codes are compared upper-cased.
+    """
+    skip = {c.strip().upper() for c in (exclude or set())}
+    return [code for code, _parent, _count in load_mondet(csv_path) if code not in skip]
+
+
+def top_ncaa_excluding(
+    n: int,
+    csv_path: str | Path | None = None,
+    *,
+    exclude: set[str] | None = None,
+) -> list[str]:
+    """The ``n`` most common TRUE ncAA by entity_count, after removing ``exclude`` codes."""
+    return ncaa_codes(csv_path, exclude=exclude)[: max(0, int(n))]
+
+
 def mondet_parent(code: str, csv_path: str | Path | None = None) -> Optional[str]:
     """Canonical 3-letter parent for a MONDE-T code, or None if the code is not in the catalog."""
     want = (code or "").strip().upper()
