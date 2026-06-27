@@ -147,3 +147,51 @@ def test_perturb_chirality_never_flips_frozen_positions():
         out = _perturb_chirality(pattern, rng, frozen=frozen)
         for i in frozen:
             assert out[i] == pattern[i]   # coordinator handedness never changes
+
+
+# ── track #2: ncAA identity move (Variant-B only) ───────────────────────────────
+def test_ncaa_move_noop_when_palette_empty():
+    from xenodesign.abc.moves import ncaa_identity_move
+    rng = random.Random(0)
+    assert ncaa_identity_move("ACDEF", rng, palette=[], frozen=set()) == "ACDEF"
+
+
+def test_ncaa_move_only_proposes_from_palette():
+    from xenodesign.abc.moves import ncaa_identity_move, identity_tokens
+    palette = ["AIB", "ORN"]
+    rng = random.Random(1)
+    for _ in range(500):
+        out = ncaa_identity_move("AAAAA", rng, palette=palette, frozen=set())
+        for tok in identity_tokens(out):
+            if tok.startswith("("):
+                assert tok[1:-1] in palette   # any ncAA block is a palette member
+
+
+def test_ncaa_move_never_touches_frozen_positions():
+    from xenodesign.abc.moves import ncaa_identity_move, identity_tokens
+    palette = ["AIB", "ORN", "NLE"]
+    frozen = {0, 4}
+    rng = random.Random(2)
+    for _ in range(1000):
+        out = ncaa_identity_move("HHHHH", rng, palette=palette, frozen=frozen)
+        toks = identity_tokens(out)
+        # frozen positions stay the canonical 'H' they started as (never an ncAA block).
+        assert toks[0] == "H" and toks[4] == "H"
+
+
+def test_ncaa_move_can_revert_an_ncaa_back_to_canonical():
+    from xenodesign.abc.moves import ncaa_identity_move, identity_tokens
+    rng = random.Random(0)
+    seen_revert = False
+    cur = "(AIB)AAAA"   # position 0 already an ncAA
+    for _ in range(2000):
+        out = ncaa_identity_move(cur, rng, palette=["AIB"], frozen=set())
+        if identity_tokens(out)[0] == "A":
+            seen_revert = True   # the move flipped the ncAA back to a canonical residue
+            break
+    assert seen_revert
+
+
+def test_identity_tokens_roundtrip():
+    from xenodesign.abc.moves import identity_tokens
+    assert identity_tokens("A(AIB)C") == ["A", "(AIB)", "C"]

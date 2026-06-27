@@ -88,6 +88,43 @@ def test_variant_b_mutations_are_valid_amino_acids():
     assert len(out) == 8
 
 
+# ── track #2: Variant-B ncAA palette ────────────────────────────────────────────
+
+def test_variant_b_with_palette_can_produce_an_ncaa_candidate():
+    from xenodesign.abc.moves import identity_tokens
+    # A palette opts ncAA in; over many draws at least one candidate carries a (XXX) block,
+    # and every block is a palette member.
+    fn = abc_variant_b_design_fn(rng=random.Random(0), mutation_rate=0.0,
+                                 ncaa_palette=["AIB", "ORN"])
+    saw_ncaa = False
+    for _ in range(200):
+        out = fn("AAAAA", {i: "L" for i in range(5)})
+        blocks = [t for t in identity_tokens(out) if t.startswith("(")]
+        for b in blocks:
+            assert b[1:-1] in ("AIB", "ORN")
+        if blocks:
+            saw_ncaa = True
+    assert saw_ncaa, "no ncAA candidate ever proposed despite a non-empty palette"
+
+
+def test_variant_b_without_palette_never_emits_ncaa():
+    # Variant A unaffected and Variant B with NO palette is the prior canonical-only behaviour.
+    fn = abc_variant_b_design_fn(rng=random.Random(0), mutation_rate=1.0)
+    for _ in range(200):
+        out = fn("AAAAA", {i: "L" for i in range(5)})
+        assert "(" not in out
+
+
+def test_variant_b_palette_never_touches_frozen():
+    from xenodesign.abc.moves import identity_tokens
+    fn = abc_variant_b_design_fn(rng=random.Random(3), mutation_rate=0.0,
+                                 ncaa_palette=["AIB"], frozen={0, 4})
+    for _ in range(300):
+        out = fn("HHHHH", {i: "L" for i in range(5)})
+        toks = identity_tokens(out)
+        assert toks[0] == "H" and toks[4] == "H"   # frozen coordinators never become ncAA
+
+
 # ── Variant A backbone injection (FIX 1: structure-aware re-design) ─────────────
 
 class _RecordingBackend:

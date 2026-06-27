@@ -121,7 +121,9 @@ def abc_variant_a_design_fn(backend):
 
 def abc_variant_b_design_fn(*, rng: random.Random | None = None,
                             mutation_rate: float = 0.3,
-                            alphabet: str = CANONICAL_AA):
+                            alphabet: str = CANONICAL_AA,
+                            ncaa_palette=None,
+                            frozen=None):
     """Variant B: ABC point-mutates the warm-start IDENTITY (MPNN is initial-population only).
 
     Returns ``design_fn(identity, chirality_pattern) -> identity`` that, at each call, mutates
@@ -130,24 +132,43 @@ def abc_variant_b_design_fn(*, rng: random.Random | None = None,
     pattern is not consumed here — the engine perturbs chirality separately; identity is the only
     axis this design_fn owns.
 
+    track #2 — when ``ncaa_palette`` is non-empty, each call ALSO applies one ncAA identity move
+    (``moves.ncaa_identity_move``): a non-frozen position may be set to a palette ncAA ``(XXX)``
+    block (or an existing ncAA reverted to canonical). An empty/absent palette keeps the prior
+    canonical-only behaviour. ``frozen`` (0-based declared-coordinator positions) are never
+    mutated — neither by the canonical point mutation nor the ncAA move.
+
     Args:
         rng: randomness source (defaults to a fresh ``Random()``); inject for reproducibility.
         mutation_rate: per-position mutation probability in [0, 1].
         alphabet: the candidate amino-acid alphabet (default the 20 canonical AAs).
+        ncaa_palette: VALIDATED CCD codes the ncAA move may propose (empty/None → ncAA OFF).
+        frozen: 0-based positions (declared coordinators) never mutated.
     """
+    from xenodesign.abc.moves import identity_tokens, ncaa_identity_move
+
     rng = rng or random.Random()
+    palette = list(ncaa_palette or ())
+    frozen = set(frozen or ())
 
     def design_fn(identity: str, chirality_pattern: Mapping[int, str]) -> str:
-        if mutation_rate <= 0.0:
-            return identity
-        out = []
-        for aa in identity:
-            if rng.random() < mutation_rate:
-                # Draw a DIFFERENT residue so an effective rate-1.0 move always changes identity.
-                choices = [c for c in alphabet if c != aa] or list(alphabet)
-                out.append(rng.choice(choices))
-            else:
-                out.append(aa)
-        return "".join(out)
+        if mutation_rate > 0.0:
+            # Per-position canonical point mutation. Tokenize so ncAA ``(XXX)`` blocks are treated
+            # as single positions (preserved unless explicitly reverted by the ncAA move) and the
+            # position index lines up with ``frozen``.
+            out = []
+            for i, tok in enumerate(identity_tokens(identity)):
+                if i in frozen or tok.startswith("("):
+                    out.append(tok)  # never mutate a frozen position or an existing ncAA block here
+                elif rng.random() < mutation_rate:
+                    # Draw a DIFFERENT residue so an effective rate-1.0 move always changes identity.
+                    choices = [c for c in alphabet if c != tok] or list(alphabet)
+                    out.append(rng.choice(choices))
+                else:
+                    out.append(tok)
+            identity = "".join(out)
+        if palette:
+            identity = ncaa_identity_move(identity, rng, palette=palette, frozen=frozen)
+        return identity
 
     return design_fn

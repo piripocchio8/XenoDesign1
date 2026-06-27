@@ -119,6 +119,64 @@ def _prior_independent(n: int, rng: random.Random) -> ChiralityPattern:
 _PRIORS = (_prior_alternating, _prior_boundary, _prior_apices, _prior_independent)
 
 
+# ── track #2: ncAA identity move (Variant-B only) ───────────────────────────────
+
+# Reverting an ncAA block to a canonical residue draws from this small neutral set (the move
+# only needs a plausible canonical residue to put back; identity refinement is MPNN's job).
+_REVERT_CANONICAL = "AGLSV"
+
+
+def identity_tokens(identity: str) -> list[str]:
+    """Split a Variant-B identity into per-position tokens.
+
+    A token is either a single canonical 1-letter code (``'A'``) or a parenthesized ncAA/D-CCD
+    block (``'(AIB)'``). This is the per-RESIDUE view both the ncAA move and the FASTA emit use,
+    so position indices line up with the chirality pattern. Malformed (unclosed ``'('``) input
+    yields the rest of the string as one trailing token (best-effort; never raises)."""
+    out: list[str] = []
+    i = 0
+    while i < len(identity):
+        if identity[i] == "(":
+            j = identity.find(")", i)
+            if j == -1:
+                out.append(identity[i:])
+                break
+            out.append(identity[i:j + 1])
+            i = j + 1
+        else:
+            out.append(identity[i])
+            i += 1
+    return out
+
+
+def ncaa_identity_move(
+    identity: str,
+    rng: random.Random,
+    palette: Sequence[str],
+    frozen: set | None = None,
+) -> str:
+    """Set ONE non-frozen position's identity to a palette ncAA (or revert an ncAA to canonical).
+
+    Returns ``identity`` unchanged when ``palette`` is empty (ncAA OFF) — the existing Variant-B
+    behaviour. Otherwise picks one position not in ``frozen`` (0-based) and either swaps in a
+    random palette ncAA as a ``(XXX)`` block, or — if that position is already an ncAA block —
+    reverts it to a canonical residue. Frozen positions (declared coordinators) are never chosen.
+    Pure/deterministic given ``rng``."""
+    if not palette:
+        return identity
+    frozen = frozen or set()
+    toks = identity_tokens(identity)
+    choices = [i for i in range(len(toks)) if i not in frozen]
+    if not choices:
+        return identity
+    i = rng.choice(choices)
+    if toks[i].startswith("("):
+        toks[i] = rng.choice(_REVERT_CANONICAL)  # revert the ncAA back to a canonical residue
+    else:
+        toks[i] = f"({rng.choice(list(palette))})"
+    return "".join(toks)
+
+
 def seed_chirality_pattern(
     n: int,
     required: Mapping[int, str] | None = None,
