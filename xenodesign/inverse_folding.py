@@ -189,9 +189,12 @@ def call_backend(fn, design_backbone, context_coords, context_elements,
                  fixed_mask, temperature, num_seqs, *, known_seq=None):
     """Invoke an InverseFoldingBackend, threading ``known_seq`` (B2) only when it opts in.
 
-    Centralises the known_seq-aware call so every seam (SequenceUpdater, MultiCandidate, the
-    C-term Gly anchor, beam) preserves the L-projected real sequence while staying compatible with
-    legacy 6-arg backends and test fakes."""
+    Centralises the known_seq-aware call so every seam routed through it (SequenceUpdater,
+    MultiCandidate, the C-term Gly anchor) preserves the L-projected real sequence while staying
+    compatible with legacy 6-arg backends and test fakes.
+
+    Known gap: beam.py bypasses this helper, so beam search does NOT yet thread known_seq through
+    call_backend; this is subsumed by the planned composer refactor."""
     if known_seq is not None and _accepts_known_seq(fn):
         return fn(design_backbone, context_coords, context_elements,
                   fixed_mask, temperature, num_seqs, known_seq=known_seq)
