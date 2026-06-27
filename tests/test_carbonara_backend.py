@@ -55,18 +55,21 @@ def test_design_fn_is_inverse_folding_backend():
     assert isinstance(cb.carbonara_design_fn, InverseFoldingBackend)
 
 
-def test_design_fn_has_exactly_six_positional_params():
+def test_design_fn_has_six_required_plus_optional_known_seq():
+    # B2: the contract now carries an OPTIONAL 7th positional param `known_seq` (the real
+    # L-projected sequence). The first six are unchanged; known_seq has a default so legacy
+    # 6-arg callers still work.
     import inspect
 
     params = [
         p for p in inspect.signature(cb.carbonara_design_fn).parameters.values()
         if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
     ]
-    assert len(params) == 6
     assert [p.name for p in params] == [
         "design_backbone", "context_coords", "context_elements",
-        "fixed_mask", "temperature", "num_seqs",
+        "fixed_mask", "temperature", "num_seqs", "known_seq",
     ]
+    assert params[-1].default is None   # known_seq is optional
 
 
 def test_returns_num_seqs_l_sequences_of_len_n_res(monkeypatch):
@@ -140,13 +143,24 @@ def test_parses_design_chain_discards_known_chain(monkeypatch):
 # Fixed positions -> deterministic placeholder ('A'), like sequence_update.py:412-414.
 # --------------------------------------------------------------------------------------------
 def test_fixed_positions_reapplied_as_placeholder_A(monkeypatch):
-    # CARBonAra echoes the known residue at fixed positions; the adapter overwrites them with 'A'.
+    # No known_seq (legacy) -> fixed positions fall back to the 'A' placeholder.
     _patch_run(monkeypatch, design_seqs=["GMDR"])
     bb = np.zeros((4, 4, 3))
     out = cb.carbonara_design_fn(bb, np.zeros((0, 3)), [],
                                  [True, False, True, False], temperature=0.1, num_seqs=1)
     # positions 0 and 2 forced to 'A'; designed positions 1,3 kept ('M','R').
     assert out == ["AMAR"]
+
+
+def test_fixed_positions_restored_from_known_seq(monkeypatch):
+    # B2: with a known_seq, fixed positions are restored to their REAL identity, not 'A'.
+    _patch_run(monkeypatch, design_seqs=["GMDR"])
+    bb = np.zeros((4, 4, 3))
+    out = cb.carbonara_design_fn(bb, np.zeros((0, 3)), [],
+                                 [True, False, True, False], temperature=0.1, num_seqs=1,
+                                 known_seq="HKHE")
+    # fixed positions 0,2 -> known_seq 'H','H'; designed positions 1,3 kept ('M','R').
+    assert out == ["HMHR"]
 
 
 # --------------------------------------------------------------------------------------------

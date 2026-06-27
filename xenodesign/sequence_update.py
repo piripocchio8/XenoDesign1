@@ -20,10 +20,12 @@ from typing import Callable, Optional, Sequence
 import numpy as np
 
 from xenodesign.inverse_folding import (
+    call_backend,
     can_use_ligandmpnn,
     choose_reflection,
     designable_positions,
     is_inverse_folding_backend,
+    l_projected_known_seq,
     prepare_inverse_folding_inputs,
 )
 from xenodesign.io_spec import to_d_fasta
@@ -70,7 +72,7 @@ class SequenceUpdater:
             return fn
 
         def _adapter(design_backbone, context_coords, context_elements,
-                     fixed_mask, temperature, num_seqs):
+                     fixed_mask, temperature, num_seqs, known_seq=None):
             one = fn(design_backbone, context_coords, context_elements, fixed_mask)
             return [one for _ in range(num_seqs)]
 
@@ -103,13 +105,21 @@ class SequenceUpdater:
                 fixed or (i in self._frozen_positions) for i, fixed in enumerate(fixed_mask)
             ]
 
-        candidates = self._design_fn(
+        # B2: feed the backend the REAL (L-projected) sequence as `known_seq`, so it natively
+        # KEEPS the fixed positions (chain_mask=0 there) with their declared identity (a D-His
+        # coordinator -> 'H', NOT the old all-Ala placeholder) and conditions free positions on
+        # real context. The projection is chirality-agnostic, matching the mirror-into-L frame.
+        known_seq = l_projected_known_seq(design_codes)
+
+        candidates = call_backend(
+            self._design_fn,
             prepared.design_backbone,
             prepared.context_coords,
             prepared.context_elements,
             fixed_mask,
             self._temperature,
             1,
+            known_seq=known_seq,
         )
         one_letter = candidates[0]
         if len(one_letter) != design_backbone.shape[0]:
@@ -177,7 +187,7 @@ def make_sequence_update_fn(updater: "SequenceUpdater", extract_fn: Callable, em
 
 def _ligandmpnn_design_fn(  # pragma: no cover (gpu/integration)
     design_backbone, context_coords, context_elements,
-    fixed_mask, temperature=0.1, num_seqs=1
+    fixed_mask, temperature=0.1, num_seqs=1, known_seq=None
 ) -> list:
     """Default backend (InverseFoldingBackend protocol): LigandMPNN (vendored at
     repo-root LigandMPNN/, MIT).
@@ -196,9 +206,14 @@ def _ligandmpnn_design_fn(  # pragma: no cover (gpu/integration)
         design_backbone: np.ndarray (n_res, 4, 3) — N, CA, C, CB in L-frame.
         context_coords: np.ndarray (n_ctx, 3) — partner atoms (may be empty).
         context_elements: list[str] — element symbols (may be empty).
-        fixed_mask: list[bool] — True = keep position fixed (output 'A' placeholder).
+        fixed_mask: list[bool] — True = keep position fixed (chain_mask=0; LigandMPNN keeps the
+            identity from `known_seq` there NATIVELY — no force-'A' overwrite, see B2).
         temperature: float — LigandMPNN sampling temperature.
         num_seqs: int — number of candidate sequences to sample and return.
+        known_seq: str | None — the REAL L-projected design-chain sequence (one-letter, len n_res).
+            Written into protein_dict["S"] so fixed positions are preserved with their declared
+            identity and free positions are designed in real sequence context. None -> all-Ala S
+            (legacy fallback; only the free positions then carry meaning).
 
     Returns:
         list[str] of length num_seqs — designed-chain one-letter L sequences (the DESIGNED
@@ -330,8 +345,16 @@ def _ligandmpnn_design_fn(  # pragma: no cover (gpu/integration)
 
     X = design_backbone.copy()  # (n_res, 4, 3): N, CA, C, CB (CB in O slot)
 
+    # B2: S is the REAL (L-projected) input sequence so fixed positions (chain_mask=0) keep their
+    # declared identity and free positions are designed in real context. None -> legacy all-Ala.
+    _aa_str_to_int = {v: k for k, v in _restype_int_to_str.items()}
     mask           = np.ones(n_res, dtype=np.int32)
-    S_placeholder  = np.zeros(n_res, dtype=np.int32)  # all Ala
+    if known_seq is not None and len(known_seq) == n_res:
+        S_input = np.array(
+            [_aa_str_to_int.get(aa.upper(), 0) for aa in known_seq], dtype=np.int32
+        )
+    else:
+        S_input = np.zeros(n_res, dtype=np.int32)  # legacy all-Ala fallback
     R_idx          = np.arange(1, n_res + 1, dtype=np.int32)
     chain_labels   = np.zeros(n_res, dtype=np.int32)
     chain_mask_arr = np.array([0.0 if fix else 1.0 for fix in fixed_mask],
@@ -378,7 +401,7 @@ def _ligandmpnn_design_fn(  # pragma: no cover (gpu/integration)
     protein_dict = {
         "X":            torch.tensor(X, device=device, dtype=torch.float32),
         "mask":         torch.tensor(mask, device=device, dtype=torch.int32),
-        "S":            torch.tensor(S_placeholder, device=device, dtype=torch.int32),
+        "S":            torch.tensor(S_input, device=device, dtype=torch.int32),
         "R_idx":        torch.tensor(R_idx, device=device, dtype=torch.int32),
         "chain_labels": torch.tensor(chain_labels, device=device, dtype=torch.int32),
         "chain_mask":   torch.tensor(chain_mask_arr, device=device, dtype=torch.float32),
@@ -439,9 +462,9 @@ def _ligandmpnn_design_fn(  # pragma: no cover (gpu/integration)
             )
             output_dict = model.sample(feature_dict)
             S_sampled = output_dict["S"][0].cpu().numpy()  # (n_res,) int
+            # B2: NO force-'A' overwrite. LigandMPNN keeps fixed positions (chain_mask=0) from the
+            # real `known_seq` S natively, so the sampled S already carries the declared identity at
+            # fixed positions and freshly designed residues elsewhere.
             one_letter_list = [_restype_int_to_str[int(aa)] for aa in S_sampled]
-            for i, fix in enumerate(fixed_mask):
-                if fix:
-                    one_letter_list[i] = "A"
             results.append("".join(one_letter_list).replace("X", "A"))
     return results
