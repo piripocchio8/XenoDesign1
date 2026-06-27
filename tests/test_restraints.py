@@ -114,11 +114,12 @@ def test_metal_coordination_one_row_per_his():
     assert rows[3] == 'A,H11,B,X1,contact,0.8,0.0,2.6,His-Zn,zn_coord_11'
 
 
-def test_metal_coordination_contact_only_by_default_even_with_atoms():
-    # METAL-(b) STEP 3: even when coordinators carry liganding atoms, the DEFAULT emission is
-    # CONTACT only (NOT covalent-to-metal — coordination is dative; the covalent-to-metal path
-    # stays OFF, it crashes chai's bond builder). With solution (b) the contact is now ATOM-AWARE
-    # (His ND1 <-> Zn ZN) rather than residue-level, so the atom actually narrows the restraint.
+def test_metal_coordination_native_covalent_when_atom_given():
+    # NATIVE COVALENT (8cyo-style): when coordinators carry a liganding atom, metal coordination
+    # is emitted as Chai's NATIVE covalent @atom bond — binder '<H><pos>@<atom>', metal '@<ZN>'
+    # (EMPTY residue field, like 8cyo's 'B,@S1'), covalent, conf 1.0, min=max=0.0. This REPLACES
+    # the prior X1@ZN covalent hack AND the atom-aware CONTACT metal emission. Chai's bond_utils
+    # SKIPS the residue-name match when res_idxB_name is empty, so '@ZN' resolves by chain+atom.
     rows = metal_coordination_rows({
         'metal_chain': 'B', 'metal_resnum': 1, 'metal_atom': 'ZN',
         'coord_chain': 'A',
@@ -127,10 +128,16 @@ def test_metal_coordination_contact_only_by_default_even_with_atoms():
     })
     contacts = [r for r in rows if ',contact,' in r]
     covalents = [r for r in rows if ',covalent,' in r]
-    assert len(contacts) == 2 and len(covalents) == 0
-    # atom-aware contact: coordinator '@ND1', metal '@ZN'.
-    assert contacts[0].split(',')[1] == 'H6@ND1' and contacts[0].split(',')[3] == 'X1@ZN'
-    assert contacts[1].split(',')[1] == 'H12@ND1' and contacts[1].split(',')[3] == 'X1@ZN'
+    assert len(contacts) == 0 and len(covalents) == 2
+    # native covalent: coordinator '<H><pos>@ND1', metal EMPTY-residue '@ZN', min=max=0.0.
+    c0 = covalents[0].split(',')
+    assert c0[0] == 'A' and c0[1] == 'H6@ND1'
+    assert c0[2] == 'B' and c0[3] == '@ZN'        # EMPTY residue field, native 8cyo form
+    assert c0[4] == 'covalent' and c0[5] == '1.0'
+    assert c0[6] == '0.0' and c0[7] == '0.0'      # min=max=0.0
+    # D coordinator handled the same (position-only name via bond patch; native @ZN metal side).
+    c1 = covalents[1].split(',')
+    assert c1[1] == 'H12@ND1' and c1[3] == '@ZN'
 
 
 def test_contact_row_atom_aware_emits_at_token():
@@ -153,59 +160,16 @@ def test_contact_row_no_atoms_unchanged_backcompat():
     assert row == 'A,H6,B,X1,contact,0.8,0.0,2.6,His-Zn,zn0'
 
 
-def test_metal_coordination_atom_aware_contact_when_atom_given():
-    # METAL-(b) STEP 3: a coordinator carrying a liganding atom emits a SINGLE atom-aware CONTACT
-    # row (atom_a on the coordinator side, atom_b='ZN' on the metal side) — NOT covalent-to-metal
-    # (coordination is dative; the covalent-to-metal path stays OFF).
-    rows = metal_coordination_rows({
-        'metal_chain': 'B', 'metal_resnum': 1, 'metal_atom': 'ZN',
-        'coord_chain': 'A',
-        'coord_residues': [(6, 'H', 'HIS', 'L', 'ND1'), (12, 'H', 'DHI', 'D', 'ND1')],
-        'max_distance': 2.6, 'confidence': 0.8,
-    })
-    contacts = [r for r in rows if ',contact,' in r]
-    covalents = [r for r in rows if ',covalent,' in r]
-    assert len(contacts) == 2 and len(covalents) == 0
-    # atom-aware: coordinator side carries '@ND1', metal side '@ZN'.
-    c0 = contacts[0].split(',')
-    assert c0[1] == 'H6@ND1' and c0[3] == 'X1@ZN'
-    # D coordinator handled the same (position-only name via the dist patch; atom retained).
-    c1 = contacts[1].split(',')
-    assert c1[1] == 'H12@ND1' and c1[3] == 'X1@ZN'
-
-
 def test_metal_coordination_metal_atom_default_is_zn():
-    # When metal_atom is unset it defaults to 'ZN' on the atom-aware contact's metal side.
+    # When metal_atom is unset it defaults to 'ZN' on the native covalent's metal side ('@ZN').
     rows = metal_coordination_rows({
         'metal_chain': 'B', 'metal_resnum': 1,
         'coord_chain': 'A',
         'coord_residues': [(6, 'H', 'HIS', 'L', 'ND1')],
         'max_distance': 2.6, 'confidence': 0.8,
     })
-    assert rows[0].split(',')[3] == 'X1@ZN'
-
-
-def test_metal_coordination_emits_covalent_only_when_flag_explicitly_on():
-    # The covalent-to-metal path still exists but is OFF by default; it appears ONLY when
-    # metal_covalent_atoms=True is explicitly passed (a future patch will make this safe).
-    rows = metal_coordination_rows({
-        'metal_chain': 'B', 'metal_resnum': 1, 'metal_atom': 'ZN',
-        'coord_chain': 'A',
-        'coord_residues': [(6, 'H', 'HIS', 'L', 'ND1'), (12, 'H', 'DHI', 'D', 'ND1')],
-        'max_distance': 2.6, 'confidence': 0.8,
-        'metal_covalent_atoms': True,
-    })
-    contacts = [r for r in rows if ',contact,' in r]
-    covalents = [r for r in rows if ',covalent,' in r]
-    assert len(contacts) == 2 and len(covalents) == 2
-    # atom-level covalent: binder 'H6@ND1' <-> metal 'X1@ZN'.
-    c0 = covalents[0].split(',')
-    assert c0[0] == 'A' and c0[1] == 'H6@ND1'
-    assert c0[2] == 'B' and c0[3] == 'X1@ZN'
-    assert c0[4] == 'covalent'
-    # D coordinator also produces a covalent row (DHI12, atom ND1).
-    c1 = covalents[1].split(',')
-    assert c1[1] == 'H12@ND1' and c1[3] == 'X1@ZN'
+    assert rows[0].split(',')[4] == 'covalent'
+    assert rows[0].split(',')[3] == '@ZN'
 
 
 def test_metal_coordination_no_atoms_is_pure_contact_backcompat():
@@ -259,13 +223,13 @@ def test_build_cyclic_restraint_rows_preserves_atom_and_chirality():
                                        coord_residues=coords)
     contacts = [r for r in rows if ',contact,' in r]
     covalents = [r for r in rows if ',covalent,' in r]
-    # FIX A: covalent-to-metal is OFF by default (it crashes Chai), so the builder emits
-    # CONTACT rows only. The full tuple (incl. atom + chirality) is still threaded through
-    # (a future patch will consume the retained atom), but no metal covalent rows emit here.
-    assert len(contacts) == 2 and len(covalents) == 0
-    # The declared D coordinator's identity + liganding atom are preserved (atom-aware contact).
-    assert contacts[0].split(',')[1] == 'H6@ND1'
-    assert contacts[1].split(',')[1] == 'H12@ND1'
+    # NATIVE COVALENT: a coordinator carrying a liganding atom now emits Chai's native covalent
+    # @atom bond (binder '<H><pos>@ND1', metal EMPTY-residue '@ZN'), NOT a contact. The full tuple
+    # (incl. atom + chirality) is threaded through and consumed.
+    assert len(contacts) == 0 and len(covalents) == 2
+    # The declared coordinator's identity + liganding atom are preserved; metal side is '@ZN'.
+    assert covalents[0].split(',')[1] == 'H6@ND1' and covalents[0].split(',')[3] == '@ZN'
+    assert covalents[1].split(',')[1] == 'H12@ND1' and covalents[1].split(',')[3] == '@ZN'
 
 
 def test_build_for_case_nonalpha_shell_raises_pending_gate():
@@ -295,6 +259,21 @@ def test_covalent_bond_row_atom_level_format():
     assert c[2] == 'A' and c[3] == 'C19@SG'
     assert c[4] == 'covalent'
     assert c[8] == 'disulfide_5_19' and c[9] == 'ss_5_19'
+
+
+def test_covalent_bond_row_empty_residue_ligand_side_emits_at_atom():
+    # NATIVE 8cyo form: a ligand/metal side with an EMPTY residue identity emits '@<atom>' (no
+    # one-letter, no pos), matching the shipped example 'B,@S1'. The protein side keeps the full
+    # '<code><pos>@<atom>' token. Used for metal coordination (binder His@ND1 <-> metal @ZN).
+    row = covalent_bond_row('A', 6, 'ND1', 'B', 1, 'ZN',
+                            res_one_letter_a='H', res_one_letter_b='',
+                            confidence=1.0, bond_length=0.0,
+                            comment='His-Zn', restraint_id='zn_cov_6')
+    c = _cols(row)
+    assert c[0] == 'A' and c[1] == 'H6@ND1'      # protein side: full token
+    assert c[2] == 'B' and c[3] == '@ZN'         # ligand side: EMPTY residue, native @atom
+    assert c[4] == 'covalent'
+    assert c[6] == '0.0' and c[7] == '0.0'       # min=max=0.0
 
 
 def test_covalent_bond_row_allows_intra_chain():

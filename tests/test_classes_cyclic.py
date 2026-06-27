@@ -107,14 +107,15 @@ def test_cyclic_restraints_writes_metal_coordination(tmp_path):
     path = c.restraints(cfg, get_case("cyclic"), out_dir=tmp_path, target_ctx=None)
     assert path is not None and path.exists()
     text = path.read_text()
-    assert "contact" in text
-    # FIX A: metal coordination is CONTACT-ONLY by default (covalent-to-Zn crashes Chai); the
-    # metal_coord rows are contacts, NOT covalent. The head-to-tail closure covalent still rides
-    # along by default (a real, working backbone bond).
+    # NATIVE COVALENT (8cyo-style): coordinators declare a liganding atom (ND1), so metal
+    # coordination is emitted as Chai's native covalent @atom bond (binder '<H><pos>@ND1', metal
+    # EMPTY-residue '@ZN'), NOT a contact. The head-to-tail closure covalent rides along too.
     assert "metal_coord_" in text and "cyclic_closure" in text
     coord_covalents = [r for r in text.splitlines()
                        if "metal_coord_" in r and ",covalent," in r]
-    assert coord_covalents == [], "metal coordination must be contact-only by default"
+    assert len(coord_covalents) == 4, "metal coordination must be native covalent @atom"
+    assert all(r.split(",")[3] == "@ZN" for r in coord_covalents), \
+        "metal side must be the native empty-residue '@ZN' token"
 
 
 def test_cyclic_restraints_chain_aware_binder_last(tmp_path):
@@ -171,10 +172,10 @@ def _coord_tuples(spec):
 
 
 def test_cyclic_metal_emits_coordination_and_closure_together(tmp_path):
-    """WT-RESTRAINTS #1+#3 / FIX A: a cyclic metal run (coord_residues with liganding atoms) must
-    write BOTH the 4 residue-level CONTACT coordination rows AND an auto head-to-tail closure row —
+    """WT-RESTRAINTS #1+#3: a cyclic metal run (coord_residues with liganding atoms) must write
+    BOTH the 4 NATIVE COVALENT His->Zn coordination rows AND an auto head-to-tail closure row —
     the 6UFA analogue is a CYCLE, so closure rides WITH the coordination rows by default (no opt-in).
-    Metal coordination is CONTACT-ONLY by default (covalent-to-Zn crashes Chai)."""
+    Metal coordination is the native Chai covalent @atom bond (8cyo-style empty-residue ligand)."""
     c = Cyclic()
     coords = _coord_tuples("H6,DHI12,H18,DHI24")
     cfg = resolve_config("cyclic", target_type="metal", out_dir=str(tmp_path),
@@ -182,12 +183,14 @@ def test_cyclic_metal_emits_coordination_and_closure_together(tmp_path):
                                         "restraint.params": {"coord_residues": coords}})
     path = c.restraints(cfg, get_case("cyclic"), out_dir=tmp_path, target_ctx=None)
     text = path.read_text()
-    # 4 residue-level CONTACT His->Zn coordination rows (one per declared coordinator).
-    coord_contacts = [r for r in text.splitlines() if "metal_coord_" in r and ",contact," in r]
-    assert len(coord_contacts) == 4, f"expected 4 contact coordination rows, got {coord_contacts}"
-    # NO covalent-to-metal coordination rows by default (FIX A: they crash Chai).
+    # 4 NATIVE COVALENT His->Zn coordination rows (one per declared coordinator), metal side '@ZN'.
     coord_covalents = [r for r in text.splitlines() if "metal_coord_" in r and ",covalent," in r]
-    assert coord_covalents == [], f"metal coordination must be contact-only, got {coord_covalents}"
+    assert len(coord_covalents) == 4, f"expected 4 covalent coordination rows, got {coord_covalents}"
+    assert all(r.split(",")[3] == "@ZN" for r in coord_covalents), \
+        f"metal side must be native empty-residue '@ZN', got {coord_covalents}"
+    # NO residue-level contact coordination rows (atoms are declared -> native covalent).
+    coord_contacts = [r for r in text.splitlines() if "metal_coord_" in r and ",contact," in r]
+    assert coord_contacts == [], f"declared-atom coordination is covalent, got {coord_contacts}"
     # AND exactly one auto head-to-tail closure row (covalent backbone bond), without any opt-in.
     closures = [r for r in text.splitlines() if "cyclic_closure" in r]
     assert len(closures) == 1, f"expected one auto-closure row, got {closures}"

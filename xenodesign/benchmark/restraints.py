@@ -191,20 +191,23 @@ def metal_coordination_rows(params: dict) -> list:
       * ``his_resnums`` — the legacy His-only positions (each emitted with identity 'H'); used
         only when ``coord_residues`` is absent (the case default).
 
-    ATOM-SPECIFIC coordination (METAL-(b) solution (b)): when a coordinator carries a liganding
-    atom (the 5th tuple element, e.g. 'ND1'/'SG'/'OD1'), a SINGLE ATOM-AWARE CONTACT row is emitted
-    carrying ``atom_a`` (the coordinator's liganding atom) and ``atom_b`` (the metal atom, default
-    'ZN') — a real atom-specific dative coordination (His ND1 <-> Zn), NOT a covalent bond. The
-    metal must be fed as a CCD residue (targets/io_spec) so 'ZN' resolves to the cached-conformer
-    atom; with the SMILES form the atom is 'ZN1' and would not resolve. D coordinators are handled
-    the same (the dist patch relaxes the residue-name guard to position-only).
+    ATOM-SPECIFIC coordination (NATIVE Chai covalent @atom, 8cyo-style): when a coordinator carries
+    a liganding atom (the 5th tuple element, e.g. 'ND1'/'SG'/'OD1'), a SINGLE NATIVE COVALENT row is
+    emitted — binder ``<H><pos>@<atom>`` <-> metal ``@<metal_atom>`` (EMPTY residue field, default
+    atom 'ZN'), covalent, confidence 1.0, min=max=0.0. This is exactly the form of Chai's shipped
+    example ``examples/covalent_bonds/8cyo.restraints`` (``A,C217@SG,B,@S1,covalent,...``): the
+    ligand side is ``@<atom>`` with an EMPTY residue, so Chai's
+    ``get_atom_covalent_bond_pairs_from_constraints`` SKIPS the residue-name match
+    (``if constraint.res_idxB_name:`` is false) and resolves the metal by chain+atom only. The metal
+    MUST be fed as the CCD residue 'ZN' (atom 'ZN') so '@ZN' matches; with the SMILES form the atom
+    is 'ZN1' and would not resolve. D coordinators are handled the same (the bond patch keeps the
+    D-His binder-side synonym relaxation for 'H<pos>@<atom>' where the token is DHI).
 
-    Coordination is DATIVE, so the covalent-to-metal path stays OFF by default
-    (``metal_covalent_atoms=False``): a covalent-to-metal row makes chai's
-    ``get_atom_covalent_bond_pairs_from_constraints`` assert (the metal one-letter 'X'@ZN does not
-    resolve through the L-only name table), which CRASHES the run — GPU-confirmed. It is emitted
-    ONLY when ``metal_covalent_atoms=True`` is passed explicitly. With NO atoms, behavior is
-    unchanged (residue-level contact)."""
+    This REPLACES both the prior ``X1@ZN`` covalent hack (which crashed because the bogus 'X1'
+    residue forced a failed name match) AND the atom-aware CONTACT metal emission. The
+    ``metal_covalent_atoms`` flag is no longer consulted — a coordinator that declares an atom is
+    ALWAYS emitted as the native covalent bond. With NO atom, behavior is unchanged: a residue-level
+    CONTACT is the fallback (the metal token is 'X'/UNK)."""
     metal_chain = params['metal_chain']
     metal_resnum = params['metal_resnum']
     coord_chain = params.get('his_chain') or params.get('coord_chain')
@@ -223,27 +226,26 @@ def metal_coordination_rows(params: dict) -> list:
             raise ValueError('metal_coordination_rows: no coord_residues or his_resnums provided')
         # Legacy His-only path: identity 'H', no atom, original 'His-Zn'/'zn_coord_<pos>'.
         items = [(int(hr), 'H', None, 'His-Zn', f'zn_coord_{int(hr)}') for hr in his_resnums]
-    # Covalent-to-metal emission is OFF by default (it crashes Chai's covalent-bond builder — the
-    # metal one-letter 'X'@ZN never resolves). Coordination is dative; the atom-aware CONTACT below
-    # carries the liganding atom instead. The bond only emits when explicitly opted in.
-    emit_covalent = bool(params.get('metal_covalent_atoms', False))
     rows = []
     for pos, one_letter, atom, comment, rid in items:
-        # Atom-aware contact when the coordinator declares a liganding atom: narrows the contact to
-        # <coord>@<atom> <-> <metal>@<metal_atom>. Residue-level otherwise (back-compat).
-        rows.append(contact_row(
-            chain_a=coord_chain, resnum_a=pos, chain_b=metal_chain, resnum_b=metal_resnum,
-            confidence=params['confidence'], max_distance=params['max_distance'],
-            res_one_letter_a=one_letter, res_one_letter_b=UNKNOWN_RES,
-            atom_a=(atom or ''), atom_b=(metal_atom if atom else ''),
-            comment=comment, restraint_id=rid))
-        if emit_covalent and atom:
+        if atom:
+            # NATIVE Chai covalent @atom bond (8cyo-style): binder '<H><pos>@<atom>' <-> metal
+            # EMPTY-residue '@<metal_atom>', covalent, conf 1.0, min=max=0.0. res_one_letter_b='' on
+            # the covalent_bond_row drives the empty-residue ligand side ('@ZN'), so the metal
+            # resolves by chain+atom (no failing name match — the X1@ZN crash is gone).
             rows.append(covalent_bond_row(
                 chain_a=coord_chain, resnum_a=pos, atom_a=atom,
                 chain_b=metal_chain, resnum_b=metal_resnum, atom_b=metal_atom,
+                res_one_letter_a=one_letter, res_one_letter_b='',
+                confidence=1.0, bond_length=0.0,
+                comment=comment, restraint_id=rid))
+        else:
+            # No liganding atom declared -> residue-level CONTACT fallback (the metal token is UNK).
+            rows.append(contact_row(
+                chain_a=coord_chain, resnum_a=pos, chain_b=metal_chain, resnum_b=metal_resnum,
+                confidence=params['confidence'], max_distance=params['max_distance'],
                 res_one_letter_a=one_letter, res_one_letter_b=UNKNOWN_RES,
-                confidence=params['confidence'],
-                comment=f'{comment}-covalent', restraint_id=f'{rid}_cov'))
+                comment=comment, restraint_id=rid))
     return rows
 
 
@@ -267,11 +269,24 @@ def covalent_bond_row(chain_a: str, resnum_a: int, atom_a: str,
         from the L parent may fail this match — verified per-run, see design_cyclic/nonalpha.)
       * max/min distance are NOT used as a restraint for COVALENT (the bond is topological);
         ``bond_length`` is carried in max_distance_angstrom for documentation only.
+
+    NATIVE EMPTY-RESIDUE LIGAND SIDE (8cyo form): when a side's ``res_one_letter_*`` is empty
+    ('' or None), that endpoint is emitted as the bare ``@<atom>`` token (NO one-letter, NO pos),
+    exactly like Chai's shipped example ``examples/covalent_bonds/8cyo.restraints`` whose ligand
+    side is ``B,@S1``. Chai's parser reads ``res_idx*_name == ''`` and ``bond_utils``
+    SKIPS the residue-name match (``if constraint.res_idx*_name:``), resolving by chain + position
+    (defaults to 1) + atom only. This is the canonical way to bond to a single-residue CCD ligand
+    (e.g. a metal: binder ``H6@ND1`` <-> metal ``@ZN``) without a failing name match. The protein
+    side keeps its full ``<code><pos>@<atom>`` token.
     """
     _check_confidence(confidence)
+    tok_a = (f'{_res_idx(res_one_letter_a, resnum_a)}@{atom_a}'
+             if res_one_letter_a else f'@{atom_a}')
+    tok_b = (f'{_res_idx(res_one_letter_b, resnum_b)}@{atom_b}'
+             if res_one_letter_b else f'@{atom_b}')
     return ','.join([
-        chain_a, f'{_res_idx(res_one_letter_a, resnum_a)}@{atom_a}',
-        chain_b, f'{_res_idx(res_one_letter_b, resnum_b)}@{atom_b}',
+        chain_a, tok_a,
+        chain_b, tok_b,
         'covalent', str(float(confidence)), '0.0', str(float(bond_length)),
         comment, restraint_id,
     ])

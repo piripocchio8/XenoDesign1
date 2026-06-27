@@ -345,6 +345,22 @@ def test_covalent_match_by_name_skips_backbone_atoms():
     assert _covalent_match_by_name("SG", None) is False
 
 
+def test_covalent_match_by_name_skips_empty_residue_ligand_side():
+    """NATIVE 8cyo metal coordination: the metal side of the covalent row is '@ZN' — an EMPTY
+    residue identity (res_idxB_name == ''). chai's stock bond_utils guards the name match with
+    ``if constraint.res_idxB_name:``, so an empty residue field SKIPS the name match and resolves
+    by chain+position+atom only. Our patched copy mirrors this through _covalent_match_by_name:
+    with no residue one-letter it returns False (skip the name guard) regardless of the atom,
+    so '@ZN' (a side-chain-looking atom but EMPTY residue) still resolves."""
+    from xenodesign.chai_patches import _covalent_match_by_name
+
+    # Metal side: atom 'ZN', EMPTY residue identity -> name guard SKIPPED (resolve by atom/pos).
+    assert _covalent_match_by_name("ZN", "") is False
+    assert _covalent_match_by_name("ZN", None) is False
+    # Sanity: the binder side His@ND1 carries a real identity -> name guard PRESERVED.
+    assert _covalent_match_by_name("ND1", "H") is True
+
+
 def test_closure_resolves_when_terminus_identity_drifts_from_seed():
     """The crux of FIX B8: a head-to-tail closure row built from the SEED termini (e.g. 'R1',
     'H12') must still resolve when MPNN has CHANGED residue 1's identity in the loop (so the
