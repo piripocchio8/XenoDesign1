@@ -226,21 +226,32 @@ PRESETS: dict[str, DesignConfig] = {
 }
 
 
-def _apply_dotted(cfg: DesignConfig, key: str, value):
-    """Set 'loop.iters'/'target.msa'/'seed' style overrides on the dataclass tree."""
+def _set_recursive(cfg: DesignConfig, key: str, value):
+    """Recursive setter shared by the dotted-key and nested-dict override paths.
+
+    `key` may be dotted ('loop.iters') to descend the dataclass tree; a dict `value`
+    on a nested dataclass attribute is overlaid recursively (key-by-key).
+    """
     if "." in key:
         head, tail = key.split(".", 1)
-        _apply_dotted(getattr(cfg, head), tail, value)
+        _set_recursive(getattr(cfg, head), tail, value)
+    elif (isinstance(value, dict) and hasattr(cfg, key)
+          and dataclasses.is_dataclass(getattr(cfg, key))):
+        child = getattr(cfg, key)
+        for k, v in value.items():
+            _set_recursive(child, k, v)
     else:
         setattr(cfg, key, value)
 
 
+def _apply_dotted(cfg: DesignConfig, key: str, value):
+    """Set 'loop.iters'/'target.msa'/'seed' style overrides on the dataclass tree."""
+    _set_recursive(cfg, key, value)
+
+
 def _overlay(cfg: DesignConfig, data: dict):
     for k, v in data.items():
-        if isinstance(v, dict) and hasattr(cfg, k) and dataclasses.is_dataclass(getattr(cfg, k)):
-            _overlay(getattr(cfg, k), v)
-        else:
-            setattr(cfg, k, v)
+        _set_recursive(cfg, k, v)
 
 
 def resolve_config(binder_class: str, target_type: str | None = None,
