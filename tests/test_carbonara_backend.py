@@ -102,6 +102,27 @@ def test_asserts_len_equals_design_backbone(monkeypatch):
                                temperature=0.1, num_seqs=1)
 
 
+def test_known_seq_wrong_length_raises(monkeypatch):
+    # FAIL FAST: a known_seq whose length != n_res would otherwise 'A'-pad its tail, silently
+    # dropping pinned coordinator identities. It must raise a clear ValueError instead.
+    _patch_run(monkeypatch, design_seqs=["GMDR"])
+    bb = np.zeros((4, 4, 3))                  # n_res == 4
+    with pytest.raises(ValueError, match="known_seq length"):
+        cb.carbonara_design_fn(bb, np.zeros((0, 3)), [], [False] * 4,
+                               temperature=0.1, num_seqs=1, known_seq="GMD")  # len 3
+
+
+def test_known_seq_correct_length_still_works(monkeypatch):
+    # A correctly-sized known_seq is accepted; its identity is re-imposed at fixed positions.
+    _patch_run(monkeypatch, design_seqs=["GMDR"])
+    bb = np.zeros((4, 4, 3))
+    out = cb.carbonara_design_fn(bb, np.zeros((0, 3)), [],
+                                 [True, False, False, False], temperature=0.1,
+                                 num_seqs=1, known_seq="CKLY")  # len 4 == n_res
+    assert len(out) == 1 and len(out[0]) == 4
+    assert out[0][0] == "C"  # fixed position 0 restored from known_seq
+
+
 # --------------------------------------------------------------------------------------------
 # fixed_mask (0-based) -> known_positions (1-based on the design chain) — OFF-BY-ONE.
 # --------------------------------------------------------------------------------------------

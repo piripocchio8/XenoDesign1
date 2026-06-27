@@ -225,6 +225,17 @@ def _ligandmpnn_design_fn(  # pragma: no cover (gpu/integration)
     import pathlib
 
     import numpy as np
+
+    # FAIL FAST: a known_seq whose length disagrees with the backbone would otherwise be
+    # silently dropped to all-Ala below (losing pinned coordinator identities). Raise instead,
+    # mirroring the `len(one_letter) != n_res` guards on the design side.
+    _n_res = np.asarray(design_backbone).shape[0]
+    if known_seq is not None and len(known_seq) != _n_res:
+        raise ValueError(
+            f"known_seq length {len(known_seq)} != n_res {_n_res} "
+            "(would silently fall back to all-Ala, dropping pinned identities)"
+        )
+
     import torch
 
     # ------------------------------------------------------------------
