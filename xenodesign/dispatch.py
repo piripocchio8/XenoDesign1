@@ -320,9 +320,8 @@ def run_design(cfg: DesignConfig) -> dict:
     from xenodesign.loop import HalluLoop, LoopState
     from xenodesign.seed import reflect_binder_in_complex_from_cif
 
-    from scripts.design_demo import (
-        _best_cif_path, _LoopBackendWrapper, _PredictBackendWrapper,
-    )
+    from xenodesign.cif_io import _best_cif_path
+    from xenodesign.backends.wrappers import _LoopBackendWrapper, _PredictBackendWrapper
 
     t0 = time.time()
     out_dir = Path(cfg.out_dir)

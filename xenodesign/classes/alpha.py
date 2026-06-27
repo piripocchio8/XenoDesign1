@@ -24,15 +24,17 @@ from pathlib import Path
 
 import numpy as np
 
-# Reuse the reviewed plumbing from the demo driver (DRY — same pattern the legacy
-# scripts/design_alpha.py used).
-from scripts.design_demo import (
+# Reuse the reviewed CIF/backend plumbing — now PACKAGE-resident (MOD-1: moved out of
+# scripts/design_demo.py, which re-exports these for its CLI). Imported into this module's
+# namespace so the legacy CPU tests can still monkeypatch them on ``alpha_mod`` (the
+# monkeypatch contract).
+from xenodesign.cif_io import (
     _all_atoms_from_chain,
     _backbone_array_from_residues,
     _best_cif_path,
     _chirality_violation_frac_from_cif,
-    _LoopBackendWrapper,
 )
+from xenodesign.backends.wrappers import _LoopBackendWrapper
 
 # Inverse-folding bases for the --backend selector. Importing the NAMES is CPU-clean:
 # both _ligandmpnn_design_fn (torch) and carbonara_design_fn (gemmi/subprocess) defer ALL heavy
@@ -864,7 +866,7 @@ def run_alpha_design(
     )
     from xenodesign.seed import read_target_sequence, reflect_binder_in_complex_from_cif
 
-    from scripts.design_demo import _PredictBackendWrapper
+    from xenodesign.backends.wrappers import _PredictBackendWrapper
 
     shim = _shim()
 

@@ -608,7 +608,7 @@ def make_intramolecular_score_fn(wrapper):
     CPU mock, gemmi error) degrades to a pTM-only finite score (still well-defined for one chain),
     so a single bad iteration never crashes the loop.
     """
-    from scripts.design_demo import _best_cif_path
+    from xenodesign.cif_io import _best_cif_path
 
     def _score(prediction) -> float:
         ptm = float(getattr(prediction, "ptm", 0.0) or 0.0)
@@ -690,7 +690,7 @@ def _assemble_cyclic_result(cfg, history, panel_result, case, out_dir,
         sel = sel_idx if sel_idx is not None else 0
         iter_dir = out_dir / "loop" / f"iter_{sel:03d}"
         try:
-            from scripts.design_demo import _best_cif_path
+            from xenodesign.cif_io import _best_cif_path
             cif_path = _best_cif_path(iter_dir)
         except Exception:
             cif_path = iter_dir  # best-effort: the gate never raises (pass-through on a non-CIF)

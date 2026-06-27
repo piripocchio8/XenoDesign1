@@ -273,7 +273,7 @@ def chai_predict_fn(device: "str | None" = None, seed: int = 0) -> Callable[[Map
         )
         # Attach the scored CIF so the geometry objective can re-parse per-atom data
         # (the Prediction dataclass only carries pooled coords/pLDDT).
-        from scripts.design_demo import _best_cif_path
+        from xenodesign.cif_io import _best_cif_path
         try:
             pred._cif_path = _best_cif_path(out_dir / "chai_out")
         except Exception:
