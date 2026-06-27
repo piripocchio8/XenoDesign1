@@ -34,6 +34,23 @@ class SequenceUpdate:
         self.num_seqs = int(num_seqs)
         self._design_fn = design_fn
 
+    def encode_d_fasta(self, one_letter: str, chirality_pattern=None) -> str:
+        """Invariant #2 (chirality survives): ONE encoder for the next-cycle Chai sequence.
+
+        `chirality_pattern` is 0-based {pos: 'L'|'D'}. None (or an all-'D' pattern) reproduces the
+        whole-chain all-D `to_d_fasta` — the SPECIAL CASE, never a silent override (the bug at
+        io_spec.py:23 was applying to_d_fasta unconditionally, flattening declared-L coordinators).
+        Otherwise delegate to the shared `mixed_chirality_fasta` primitive (1-based keys), so L
+        positions stay bare canonical and D positions become parenthesized D-CCD; Gly stays 'G'.
+        """
+        from xenodesign.io_spec import to_d_fasta
+        if chirality_pattern is None or set(chirality_pattern.values()) <= {"D"}:
+            return to_d_fasta(one_letter)
+        import xenodesign.classes.base  # noqa: F401  (prime the base<->cyclic import cycle)
+        from xenodesign.classes.cyclic import mixed_chirality_fasta
+        fixed = {pos + 1: hand for pos, hand in chirality_pattern.items()}
+        return mixed_chirality_fasta(one_letter, fixed_chirality=fixed)
+
     def build_known_seq(self, prev_l_seq: str, frozen=None) -> str:
         """Invariant #1 (real evolving context) + frozen-identity override.
 
