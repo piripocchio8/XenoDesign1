@@ -105,6 +105,31 @@ def _seed_to_seq_update(cls, cfg, wrapper, seed_spec, roles=None):
     return fn(cfg, wrapper, seed_spec)
 
 
+def _seed_d_fasta(seed_spec) -> str:
+    """Encode the seed one-letter as the loop's iter_000 D-CCD input, honouring per-position L/D.
+
+    Default (no 'L' pinned in ``seed_spec.fixed_chirality`` — the alpha/non_alpha all-D case):
+    whole-chain ``to_d_fasta`` (byte-for-byte unchanged). When the seed declares ANY L position
+    (e.g. cyclic metal coordinators His6/His18), encode per-position via ``mixed_chirality_fasta``
+    so the L coordinators stay bare canonical and every other position is D-CCD — preventing the
+    all-D override from flipping declared-L donors to D on the first iteration.
+
+    ``fixed_chirality`` keys are 1-based; positions absent default to D (the cyclic all-D backbone),
+    matching the seq-update extractor's per-position default."""
+    from xenodesign.io_spec import to_d_fasta
+
+    one = seed_spec.one_letter
+    fixed = dict(getattr(seed_spec, "fixed_chirality", {}) or {})
+    if "L" not in fixed.values():
+        return to_d_fasta(one)  # pure all-D seed — unchanged
+    import xenodesign.classes.base  # noqa: F401  (prime the base<->cyclic import cycle)
+    from xenodesign.classes.cyclic import mixed_chirality_fasta
+
+    # Default every unpinned position to D so the backbone stays all-D except declared L donors.
+    pattern = {i + 1: fixed.get(i + 1, "D") for i in range(len(one))}
+    return mixed_chirality_fasta(one, fixed_chirality=pattern)
+
+
 def _call_referee(cls, cfg, loop_dir, esm_judge, roles):
     """Call the class's referee hook, threading the chain contract ``roles`` only when the hook
     accepts it (so a 3-arg mock referee in the unit tests still works). The referee reads the
@@ -332,7 +357,6 @@ def run_design(cfg: DesignConfig) -> dict:
     real L-seed ipTM + timed wall overwrite the report's placeholder fields.
     """
     from xenodesign.benchmark.cases import get_case
-    from xenodesign.io_spec import to_d_fasta
     from xenodesign.judges.panel import JudgePanel
     from xenodesign.loop import HalluLoop, LoopState
     from xenodesign.seed import reflect_binder_in_complex_from_cif
@@ -420,7 +444,14 @@ def run_design(cfg: DesignConfig) -> dict:
         score_fn=cls.objective(cfg, wrapper),
         refine_fn=refine_fn,
     )
-    init = LoopState(d_fasta=to_d_fasta(seed_spec.one_letter), coords=d_seed_coords)
+    # SEED chirality survival (iter_000): a plain `to_d_fasta` makes the WHOLE seed all-D, which
+    # would flip any DECLARED L coordinator (e.g. cyclic His6/His18) to D on the very first
+    # iteration — the same all-D regression the seq-update fix closes for iters >=1. When the
+    # seed carries a mixed L/D `fixed_chirality` (any position pinned 'L'), encode per-position
+    # via `mixed_chirality_fasta` so L coordinators stay bare canonical and D positions become
+    # D-CCD. Pure all-D seeds (no 'L' pinned — the alpha/non_alpha default) keep `to_d_fasta`
+    # byte-for-byte.
+    init = LoopState(d_fasta=_seed_d_fasta(seed_spec), coords=d_seed_coords)
     loop_dir = out_dir / "loop"
 
     if cfg.loop.search == "beam":

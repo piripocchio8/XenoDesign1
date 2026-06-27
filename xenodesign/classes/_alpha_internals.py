@@ -473,6 +473,26 @@ def make_alpha_seq_update_fn(wrapper: _LoopBackendWrapper, num_seqs: int = _DEFA
             kw["chirality_pattern"] = {i: chirality_pattern.get(i, "D") for i in range(n)}
         return kw
 
+    # CHIRALITY SURVIVAL (the all-D regression fix): with a per-position chirality_pattern the
+    # updater computes the MIXED-chirality d_fasta itself (L coords -> bare 'H', D coords ->
+    # '(DHI)', via mixed_chirality_fasta). Emitting the L 'one_letter' here would discard that —
+    # the loop then re-encodes it WHOLE-CHAIN all-D through `_to_d_fasta_safe(to_d_fasta(...))`,
+    # flipping the L coordinators to D (GPU-confirmed selected_d_fasta=(DHI)x23). So when a
+    # chirality_pattern is present we emit the d_fasta DIRECTLY; the loop's `_to_d_fasta_safe`
+    # passes any string containing '(' through verbatim, preserving per-coordinator handedness.
+    # The all-D alpha path (chirality_pattern is None) keeps emit='one_letter' byte-for-byte.
+    if chirality_pattern is not None:
+        d_fasta_fn = make_sequence_update_fn(updater, _extract, emit="d_fasta")
+
+        def _guarded_d_fasta(prediction) -> str:
+            # No _ensure_cterm_glycine here: that guard slices/edits a 1-letter string and would
+            # corrupt the parenthesized D-CCD d_fasta. The C-term Gly anchor (when wanted) is
+            # already applied at the design (one_letter) stage by `_cterm_gly_anchor` inside the
+            # base backend, and re-encoded by mixed_chirality_fasta as achiral 'G'.
+            return d_fasta_fn(prediction)
+
+        return _guarded_d_fasta
+
     base_fn = make_sequence_update_fn(updater, _extract, emit="one_letter")
 
     def _guarded(prediction) -> str:
