@@ -82,7 +82,11 @@ class _FakeWrapper:
 def _run_extract(monkeypatch, roles, binder_len):
     """Build the seq-update fn for ``roles`` and drive its ``_extract`` once; return the
     design_backbone length the extractor produced + the chains it queried.
+
+    Forces XENO_SEQ_STAGE=0 to test the legacy _extract path (chain-reading contract). The
+    SequenceUpdate stage path (flag on) is tested separately (test_seq_stage_greedy_route.py).
     """
+    monkeypatch.setenv("XENO_SEQ_STAGE", "0")
     fake_bb, seen = _make_chain_witness(roles.binder, binder_len, roles.context)
     # backbone_by_residue_from_cif is imported INTO the alpha module namespace inside the fn;
     # patch it at its source so the lazy import inside make_alpha_seq_update_fn picks up the fake.
@@ -146,7 +150,11 @@ def test_extract_no_target_reads_chain_A(monkeypatch):
 
 
 def test_extract_default_roles_is_alpha_B(monkeypatch):
-    """No roles kwarg -> byte-identical alpha behaviour: binder chain 'B'."""
+    """No roles kwarg -> byte-identical alpha behaviour: binder chain 'B'.
+
+    Forces XENO_SEQ_STAGE=0 to test the legacy _extract path (chain-reading contract).
+    """
+    monkeypatch.setenv("XENO_SEQ_STAGE", "0")
     # Witness keyed to alpha's hardcoded ('B' binder, 'A' context) default.
     fake_bb, seen = _make_chain_witness("B", 13, "A")
     monkeypatch.setattr("xenodesign.eval.gate_tier0a.backbone_by_residue_from_cif", fake_bb)

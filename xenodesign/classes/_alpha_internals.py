@@ -32,6 +32,9 @@ from xenodesign.backends.wrappers import _LoopBackendWrapper
 from xenodesign.carbonara_backend import carbonara_design_fn
 from xenodesign.sequence_update import _ligandmpnn_design_fn
 
+# S1.7: SequenceUpdate stage + FrozenPosition for the flag-gated greedy path.
+from xenodesign.seq_stage import FrozenPosition, SequenceUpdate
+
 
 _DEFAULT_N_ITERS = 30
 _DEFAULT_REF_TIME_STEPS = 50
@@ -450,6 +453,48 @@ def make_alpha_seq_update_fn(wrapper: _LoopBackendWrapper, num_seqs: int = _DEFA
     # chain — the chain-misidentification bug is structurally impossible.
     binder_chain = roles.binder if roles is not None else "B"
     context_chain = roles.context if roles is not None else "A"
+
+    # S1.7: route through SequenceUpdate when XENO_SEQ_STAGE != "0" (default on).
+    # The legacy inline _extract body below is the UNCHANGED "0" fallback — flag off = byte-identical.
+    import os
+    if os.environ.get("XENO_SEQ_STAGE", "1") != "0":
+        # Build FrozenPosition set from declared coordinators (for cyclic-metal chirality threading).
+        frozen = set()
+        for pos0, one_letter in (coordinators or ()):
+            hand = (chirality_pattern or {}).get(pos0, "D")
+            frozen.add(FrozenPosition(position0=pos0, identity=one_letter, chirality=hand))
+
+        # Honour the monkeypatch contract: _make_base_backend resolved via _self() (= the public
+        # alpha module) so tests that patch alpha_mod._make_base_backend are honoured, consistent
+        # with the legacy _extract path's _self()._best_cif_path convention.
+        base_stage = shim._make_base_backend(backend)
+
+        def _stage_extract(prediction) -> dict:
+            out_dir = wrapper.last_out_dir
+            if out_dir is None:
+                raise RuntimeError("seq_update called before any structure step")
+            # All IO-reading collaborators resolved via _self() so tests patching alpha_mod.* work.
+            cif = _self()._best_cif_path(out_dir)
+            from xenodesign.eval.gate_tier0a import backbone_by_residue_from_cif as _bbr
+            binder_res = (_bbr(cif, binder_chain) or _bbr(cif, binder_chain.lower()))
+            if not binder_res:
+                raise RuntimeError(f"cannot extract binder chain {binder_chain!r} from {cif}")
+            design_backbone = _backbone_array_from_residues(binder_res)
+            ctx_coords, ctx_elements = _self()._all_atoms_from_chain(cif, context_chain)
+            if ctx_coords.shape[0] == 0:
+                ctx_coords, ctx_elements = _self()._all_atoms_from_chain(cif, context_chain.lower())
+            # Invariant #1: REAL previous-iteration L sequence from the scored CIF (not all-Ala).
+            prev_l_seq = _self().binder_seq_from_cif(cif, binder_chain)
+            return {
+                "design_backbone": design_backbone,
+                "context_coords": ctx_coords,
+                "context_elements": ctx_elements,
+                "prev_l_seq": prev_l_seq,
+            }
+
+        stage = SequenceUpdate(roles=roles, frozen=frozen, num_seqs=num_seqs,
+                               design_fn=base_stage)
+        return stage.build_loop_fn(_stage_extract, chirality_pattern=chirality_pattern)
 
     def _extract(prediction) -> dict:
         out_dir = wrapper.last_out_dir

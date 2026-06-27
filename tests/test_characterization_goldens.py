@@ -182,6 +182,11 @@ def _cyclic_metal_fakes(monkeypatch, tmp_path):
                         lambda *a, **k: dummy_cif)
     monkeypatch.setattr(alpha_mod, "_all_atoms_from_chain",
                         lambda cif, chain: (np.zeros((0, 3)), []))
+    # S1.7 stage path: _stage_extract calls binder_seq_from_cif to supply prev_l_seq.
+    # Return a 24-residue placeholder (matches the fake 24-residue backbone above); the echo
+    # backend overwrites it via known_seq so this only affects invariant #1 (prev context).
+    monkeypatch.setattr(alpha_mod, "binder_seq_from_cif",
+                        lambda cif, chain: "A" * 24)
 
 
 def test_golden_cyclic_metal_greedy(tmp_path, monkeypatch):

@@ -222,12 +222,15 @@ def test_cyclic_seq_update_d_fasta_through_loop_keeps_L_coordinators_bare_H():
         # actually _cterm_gly_anchor force-sets fm[-1]=True and overwrites last char to 'G'. To
         # keep the test focused on chirality (not the anchor), neutralize the anchor.
         mp.setattr(ai, "_cterm_gly_anchor", lambda fn, *_, **__: fn)
-        # Fake the CIF readers used by _extract.
+        # Fake the CIF readers used by _extract (and _stage_extract on the S1.7 stage path).
+        # binder_seq_from_cif is called by _stage_extract to supply prev_l_seq; return a
+        # length-24 placeholder — the echo_backend will overwrite it via known_seq anyway.
         mp.setattr(ai, "_self", lambda: SimpleNamespace(
             _make_base_backend=lambda backend: echo_backend,
             _cterm_gly_anchor=lambda fn, *_, **__: fn,
             _best_cif_path=lambda d: "/tmp/fake.cif",
             _all_atoms_from_chain=lambda cif, ch: (np.zeros((0, 3)), []),
+            binder_seq_from_cif=lambda cif, chain: "A" * n,
         ))
         # backbone_by_residue_from_cif is imported inside make_alpha_seq_update_fn from
         # eval.gate_tier0a; patch it there.
