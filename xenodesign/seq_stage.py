@@ -51,6 +51,32 @@ class SequenceUpdate:
         fixed = {pos + 1: hand for pos, hand in chirality_pattern.items()}
         return mixed_chirality_fasta(one_letter, fixed_chirality=fixed)
 
+    def ensure_canonical_anchor(self, one_letter: str, chirality_pattern=None,
+                                frozen=None) -> str:
+        """Invariant #3: THE single canonical-residue rule (collapses the 3 divergent anchors:
+        _alpha_internals.py:243/:256, non_alpha.py:152, cyclic.py:324).
+
+        Ensure >=1 Chai-canonical residue. Add a C-terminal Gly ONLY when the chain has no
+        L-residue AND no Gly already; place it at the last NON-frozen position so a declared
+        coordinator (even at the C-terminus) is never modified. A chain that already carries an
+        L residue (e.g. the 2L+2D-His cycle) is tokenizable as-is and gets NO Gly.
+
+        `chirality_pattern` is 0-based {pos: 'L'|'D'}; positions absent default to 'D' (the
+        historical all-D backbone default). `frozen` positions are excluded from placement.
+        """
+        if "G" in one_letter:
+            return one_letter
+        n = len(one_letter)
+        pat = dict(chirality_pattern or {})
+        hands = {pat.get(i, "D") for i in range(n)}
+        if "L" in hands:
+            return one_letter            # an L residue is tokenizable -> no Gly needed
+        pinned = {fp.position0 for fp in (frozen if frozen is not None else self.frozen)}
+        for i in range(n - 1, -1, -1):   # C-terminal-most NON-frozen position
+            if i not in pinned:
+                return one_letter[:i] + "G" + one_letter[i + 1:]
+        return one_letter                # every position frozen (impossible in practice)
+
     def build_known_seq(self, prev_l_seq: str, frozen=None) -> str:
         """Invariant #1 (real evolving context) + frozen-identity override.
 

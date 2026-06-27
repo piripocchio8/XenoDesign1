@@ -59,3 +59,37 @@ def test_invariant2_glycine_stays_achiral():
     """Gly is always 'G' regardless of its mark (Marco's convention)."""
     stage = SequenceUpdate()
     assert stage.encode_d_fasta("HGH", chirality_pattern={0: "D", 1: "D", 2: "L"}) == "(DHI)GH"
+
+
+def test_invariant3_fully_d_chain_gets_one_cterm_gly():
+    """All-D chain, no Gly -> exactly one C-terminal Gly anchor (Chai needs >=1 canonical)."""
+    stage = SequenceUpdate()
+    pattern = {i: "D" for i in range(4)}          # all-D
+    out = stage.ensure_canonical_anchor("ACDE", chirality_pattern=pattern, frozen=set())
+    assert out == "ACDG"                          # last position -> Gly
+    assert out.count("G") == 1
+
+
+def test_invariant3_chain_with_an_L_residue_gets_no_gly():
+    """2L+2D-His cycle: an L residue is present -> Chai can tokenize it -> NO forced Gly."""
+    stage = SequenceUpdate()
+    pattern = {0: "L", 1: "D", 2: "L", 3: "D"}    # L present
+    out = stage.ensure_canonical_anchor("HHHH", chirality_pattern=pattern, frozen=set())
+    assert out == "HHHH"                          # unchanged — no Gly added
+
+
+def test_invariant3_existing_gly_is_left_alone():
+    stage = SequenceUpdate()
+    pattern = {i: "D" for i in range(4)}
+    assert stage.ensure_canonical_anchor("AGDE", chirality_pattern=pattern, frozen=set()) == "AGDE"
+
+
+def test_invariant3_never_overwrites_a_frozen_cterm_position():
+    """A declared coordinator AT the C-terminus is never clobbered by the Gly anchor;
+    the anchor falls back to the nearest non-frozen position (here: position 2)."""
+    stage = SequenceUpdate()
+    pattern = {i: "D" for i in range(4)}
+    frozen = {FrozenPosition(position0=3, identity="H", chirality="D")}   # His at C-term
+    out = stage.ensure_canonical_anchor("ACDH", chirality_pattern=pattern, frozen=frozen)
+    assert out[3] == "H"                          # frozen coordinator preserved
+    assert out.count("G") == 1 and out[2] == "G"  # Gly placed at the last NON-frozen position
