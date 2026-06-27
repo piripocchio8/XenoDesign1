@@ -193,7 +193,10 @@ def target_entities(cfg):
         lig["smiles" if t.smiles else "ccd"] = t.smiles or t.ccd
         return [lig], None, None
     if t.target_type == "metal":
-        if not _metal_patch_verified():
+        # The dist-restraint patch is only needed when coordination restraints are actually emitted.
+        # An UNGUIDED metal run (--no_restraints => restraints_on=False) applies no coordination
+        # restraints, so the patch gate is irrelevant — skip it and let Chai hallucinate freely.
+        if cfg.restraints_on and not _metal_patch_verified():
             raise RuntimeError(
                 "metal target_type requires the token_dist_restraint patch "
                 "(chai_patches._patch_dist_restraint_match) verified-applied on the metal probe; "

@@ -46,6 +46,18 @@ def test_metal_emits_ligand_and_gate(monkeypatch):
     assert hint == "metal_coordination"
 
 
+def test_metal_gate_skipped_when_restraints_off(monkeypatch):
+    """Unguided metal run (--no_restraints => restraints_on=False): the patch gate is irrelevant
+    (no coordination restraints are emitted), so target_entities must NOT raise even when the patch
+    is unverified — the Zn ligand entity still builds."""
+    c = resolve_config("cyclic", target_type="metal")
+    c.restraints_on = False
+    monkeypatch.setattr(targets, "_metal_patch_verified", lambda: False)
+    ents, _md, hint = targets.target_entities(c)   # must not raise
+    assert any(e["type"] == "ligand" for e in ents)
+    assert hint == "metal_coordination"
+
+
 def test_metal_feeds_ccd_residue_by_default(monkeypatch):
     """METAL-(b) STEP 1: the metal enters as a CCD residue (metal_ccd='ZN'), NOT SMILES — the
     cyclic preset's default '[Zn+2]' SMILES maps to the CCD code ZN so chai tokenizes a resolvable
