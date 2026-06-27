@@ -188,3 +188,22 @@ def test_golden_search_abc_a(tmp_path, monkeypatch):
     report = dispatch.run_design(cfg)
     golden = _load_or_regold("abc_a", report)
     assert _drop_runspecific(json.loads(json.dumps(report, default=str))) == golden
+
+
+# ── ABC Variant-B baseline ─────────────────────────────────────────────────────
+# Captures the CURRENT (no-MPNN, point-mutates identity directly) ABC-B output.
+# Variant B does identity+chirality point-mutation (no MPNN, no known_seq) —
+# its baseline mainly characterises the result-dict shape + the (currently
+# anchor-less) emitted chain. Do NOT fix anything here.
+
+
+def test_golden_search_abc_b(tmp_path, monkeypatch):
+    _abc_fakes(monkeypatch)
+    cfg = resolve_config("cyclic", target_type="none", out_dir=str(tmp_path),
+                         cli_overrides={"use_pepmlm": False, "use_pll": False,
+                                        "restraints_on": False, "mixed_chirality": "B",
+                                        "abc.cycles": 2, "abc.colony_size": 3,
+                                        "abc.scout_limit": 2, "abc.chai_eval_budget": 12})
+    report = dispatch.run_design(cfg)
+    golden = _load_or_regold("abc_b", report)
+    assert _drop_runspecific(json.loads(json.dumps(report, default=str))) == golden
