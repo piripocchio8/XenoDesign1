@@ -1,0 +1,38 @@
+{
+  "binder_chirality": null,
+  "binder_length": 31,
+  "case_id": "nonalpha",
+  "cys_positions": [
+    4,
+    9,
+    14,
+    17,
+    23,
+    28
+  ],
+  "disulfide_geometry": null,
+  "disulfides": false,
+  "ick_disulfide_pairs": [
+    [
+      4,
+      17
+    ],
+    [
+      9,
+      23
+    ],
+    [
+      14,
+      28
+    ]
+  ],
+  "l_seed_iptm": 0.5,
+  "msa_dir": "XenoDesign1_local_ref/9dxx_target_gate/chai_pred_msa/msas",
+  "n_iters": 2,
+  "phase": "real HalluLoop design (anti-\u03b1 SS-bias + MSA'd 2-chain HA target)",
+  "restraints": false,
+  "selected_d_fasta": "(DCY)(DAS)(DGL)(DPN)G(DHI)(DIL)(DLY)(DCY)(DLE)(MED)(DSG)(DPR)(DCY)(DGN)(DAR)(DSN)(DTH)(DTR)(DTY)(DCY)(DVA)G(DCY)",
+  "selected_iptm": 0.5,
+  "selected_ptm": null,
+  "ss_bias_target_helix_frac": 0.0
+}

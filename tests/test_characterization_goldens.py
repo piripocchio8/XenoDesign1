@@ -91,3 +91,36 @@ def test_golden_alpha_greedy(tmp_path, monkeypatch):
     report = dispatch.run_design(cfg)
     golden = _load_or_regold("alpha_greedy", report)
     assert _drop_runspecific(json.loads(json.dumps(report, default=str))) == golden
+
+
+import xenodesign.classes.non_alpha as nonalpha_mod
+
+_NONALPHA_SEED = "CDEFGHIKCLMNPCQRSTWYCVGC"   # 24-mer w/ Cys scaffold + Gly anchor (deterministic)
+
+
+def _nonalpha_fakes(monkeypatch):
+    monkeypatch.setattr(dispatch, "_ensure_patches", lambda: None)
+    monkeypatch.setattr(dispatch, "_make_predictor",
+                        lambda cfg: (_FakePred(), lambda *a, **k: _FakePred()))
+    monkeypatch.setattr(dispatch, "target_entities",
+                        lambda cfg: ([{"type": "protein", "name": "ha1", "sequence": "AAAA"},
+                                      {"type": "protein", "name": "ha2", "sequence": "CCCC"}],
+                                     None, None))
+    monkeypatch.setattr("xenodesign.seed.reflect_binder_in_complex_from_cif",
+                        lambda *a, **k: np.zeros((3, 3)))
+    monkeypatch.setattr(nonalpha_mod.NonAlpha, "seed",
+                        lambda self, cfg, target_seq: __import__(
+                            "xenodesign.classes.base", fromlist=["SeedSpec"]
+                        ).SeedSpec(one_letter=_NONALPHA_SEED))
+    monkeypatch.setattr(nonalpha_mod, "make_alpha_seq_update_fn",
+                        lambda wrapper, **k: (lambda pred: _NONALPHA_SEED))
+
+
+def test_golden_nonalpha_greedy(tmp_path, monkeypatch):
+    _nonalpha_fakes(monkeypatch)
+    cfg = resolve_config("non_alpha", target_type="protein", out_dir=str(tmp_path),
+                         cli_overrides={"loop.iters": 2, "use_pepmlm": False, "use_pll": False,
+                                        "restraints_on": False, "loop.backend": "ligandmpnn"})
+    report = dispatch.run_design(cfg)
+    golden = _load_or_regold("nonalpha_greedy", report)
+    assert _drop_runspecific(json.loads(json.dumps(report, default=str))) == golden
