@@ -263,6 +263,12 @@ def _run_abc(cfg: DesignConfig, backend, seed_one_letter: str, out_dir: "Path") 
     knobs = cfg.abc
     rng = random.Random(cfg.seed)
 
+    # Declared coordinators (1-based) -> 0-based frozen positions. Passed into abc_search so the
+    # engine's coordinator-chirality freeze activates (track #1 gap), AND into Variant B's
+    # design_fn so pinned donors are never identity-mutated (canonical OR ncAA).
+    coord_params = (cfg.restraint.params.get("coord_residues") if cfg.restraint else None) or []
+    frozen = {int(t[0]) - 1 for t in coord_params}
+
     fitness_fn = make_abc_fitness(
         backend, k_star=knobs.fitness_steps,
         w_ptm=knobs.w_ptm, w_termini=knobs.w_termini, closure=True,
@@ -270,7 +276,12 @@ def _run_abc(cfg: DesignConfig, backend, seed_one_letter: str, out_dir: "Path") 
     )
 
     if knobs.variant == "b":
-        design_fn = abc_variant_b_design_fn(rng=rng, mutation_rate=knobs.chirality_move_rate)
+        # track #2: VALIDATE the configured ncAA palette (CPU-only) before handing it to the move
+        # set; an empty palette keeps ncAA OFF (existing behaviour).
+        from xenodesign.abc.ncaa import validate_palette
+        palette = validate_palette(knobs.ncaa_palette)
+        design_fn = abc_variant_b_design_fn(rng=rng, mutation_rate=knobs.chirality_move_rate,
+                                            ncaa_palette=palette, frozen=frozen)
     else:
         # Variant A: the coordinate-only LigandMPNN adapter (default SequenceUpdater backend).
         from xenodesign.sequence_update import _ligandmpnn_design_fn
@@ -284,7 +295,8 @@ def _run_abc(cfg: DesignConfig, backend, seed_one_letter: str, out_dir: "Path") 
     best, history = abc_search(
         init_pop, fitness_fn, design_fn,
         n_cycles=knobs.cycles, colony_size=knobs.colony_size,
-        scout_limit=knobs.scout_limit, chai_eval_budget=knobs.chai_eval_budget, rng=rng,
+        scout_limit=knobs.scout_limit, chai_eval_budget=knobs.chai_eval_budget,
+        frozen=frozen or None, rng=rng,
     )
 
     result = {

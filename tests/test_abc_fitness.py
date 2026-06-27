@@ -136,7 +136,7 @@ def test_fitness_clears_last_structure_on_failure(monkeypatch):
     fit = make_abc_fitness(_FakeBackend(ptm=0.5), k_star=15)
     fit("AGA", {0: "D", 1: "L", 2: "D"})
     assert fit.last_structure == "/tmp/fake.cif"
-    fit("(bad", {0: "D"})   # unknown letter '(' → mixed_chirality_fasta raises → -inf
+    fit("Z", {0: "D"})   # unknown 1-letter code 'Z' → mixed_chirality_fasta raises → -inf
     assert fit.last_structure is None
 
 
