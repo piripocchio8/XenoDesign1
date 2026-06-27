@@ -211,9 +211,16 @@ class DesignConfig:
     # 'B' = ABC chirality+identity, MPNN warm-start only (Variant b). Activates ABC for ANY
     # binder/target. Cyclic (mixed-chirality by definition) defaults to 'A' (see PRESETS).
     mixed_chirality: str = "none"  # none|A|B
+    # ncAA palette SCOPE for the Variant-B mixed-chirality search (derived from the MONDE-T
+    # catalog; see xenodesign.abc.ncaa.build_palette). 'd_only' = canonical D set only (default);
+    # 'd_common' = D set + top-`ncaa_top_x` MONDE-T ncAA by frequency; 'all' = D set + ALL MONDE-T
+    # ncAA (no cap). `ncaa_top_x` is the cut for 'd_common' (default 20).
+    ncaa_dict: str = "d_only"          # d_only|d_common|all
+    ncaa_top_x: int = 20               # top-X MONDE-T ncAA for 'd_common'
 
 
 VALID_MIXED_CHIRALITY = ("none", "A", "B")
+VALID_NCAA_DICT = ("d_only", "d_common", "all")
 
 
 PRESETS: dict[str, DesignConfig] = {
@@ -295,6 +302,17 @@ def resolve_config(binder_class: str, target_type: str | None = None,
     if cfg.mixed_chirality not in VALID_MIXED_CHIRALITY:
         raise ValueError(
             f"mixed_chirality must be one of {VALID_MIXED_CHIRALITY}, got {cfg.mixed_chirality!r}")
+    if cfg.ncaa_dict not in VALID_NCAA_DICT:
+        raise ValueError(
+            f"ncaa_dict must be one of {VALID_NCAA_DICT}, got {cfg.ncaa_dict!r}")
+    if not isinstance(cfg.ncaa_top_x, int) or isinstance(cfg.ncaa_top_x, bool) or cfg.ncaa_top_x < 0:
+        raise ValueError(f"ncaa_top_x must be a non-negative int, got {cfg.ncaa_top_x!r}")
+    # DERIVE the Variant-B ncAA palette from the --ncaa_dict scope (MONDE-T catalog) unless an
+    # explicit palette was supplied (config-file or --abc.ncaa_palette override wins). The 4-code
+    # DEFAULT_NCAA_PALETTE survives only as a code-level fallback inside abc.ncaa, not here.
+    if not cfg.abc.ncaa_palette:
+        from xenodesign.abc.ncaa import build_palette
+        cfg.abc.ncaa_palette = build_palette(cfg.ncaa_dict, cfg.ncaa_top_x)
     # NOTE: cfg.device is left as the unset sentinel here so config resolution stays
     # torch-free; the actual device is resolved at point-of-use (dispatch._make_predictor)
     # and baked into the provenance by dump_config().
