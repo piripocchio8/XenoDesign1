@@ -146,24 +146,39 @@ def _next_id() -> int:
 
 def expand_state(parent: BeamState, design_fn, extract_fn,
                  anchor_fn: Optional[Callable] = None,
-                 next_id: Optional[Callable[[], int]] = None) -> list[BeamState]:
+                 next_id: Optional[Callable[[], int]] = None,
+                 known_seq_fn: Optional[Callable] = None,
+                 encode_fn: Optional[Callable] = None) -> list[BeamState]:
     """Expand one parent into its ``m`` children (m = the design_fn's top_k).
 
     Calls ``extract_fn(parent)`` -> the inverse-folding inputs dict (design backbone + context),
-    then the 6-arg ``design_fn`` ONCE (a ``MultiCandidate(top_k=m)``) to get the m best L seqs,
-    best first. An optional ``anchor_fn`` (e.g. ``_ensure_cterm_glycine``) is applied to each
-    candidate L seq. NO Chai predict happens here — children are unscored until
-    ``predict_children``.
+    then the design_fn ONCE (a ``MultiCandidate(top_k=m)``) to get the m best L seqs, best first.
+    An optional ``anchor_fn`` is applied to each candidate L seq. NO Chai predict happens here.
+
+    S2.1 (SequenceUpdate routing, flag-on dispatch path): when ``known_seq_fn`` is supplied, the
+    parent's REAL evolving sequence (``known_seq_fn(parent)`` -> the prior L seq) is threaded into
+    the design_fn as ``known_seq`` so free positions condition on real context instead of all-Ala
+    (the beam.py:162 starvation bug). When ``encode_fn`` is supplied, each child's d_fasta is the
+    stage's chirality-correct + canonical-anchored encode of the designed L seq, replacing the
+    inline whole-chain ``to_d_fasta``. Both default ``None`` => byte-identical legacy behaviour
+    (the standalone scripts/design_alpha_beam.py driver passes neither).
     """
     next_id = next_id or _next_id
     inputs = extract_fn(parent)
     design_backbone = inputs["design_backbone"]
     n = design_backbone.shape[0]
     fixed_mask = [False] * n
-    candidates = design_fn(
-        design_backbone, inputs["context_coords"], inputs["context_elements"],
-        fixed_mask, 0.1, n,
-    )
+    if known_seq_fn is not None:
+        known_seq = known_seq_fn(parent)
+        candidates = design_fn(
+            design_backbone, inputs["context_coords"], inputs["context_elements"],
+            fixed_mask, 0.1, n, known_seq=known_seq,
+        )
+    else:
+        candidates = design_fn(
+            design_backbone, inputs["context_coords"], inputs["context_elements"],
+            fixed_mask, 0.1, n,
+        )
     if not candidates:
         return []
     if anchor_fn is not None:
@@ -173,8 +188,9 @@ def expand_state(parent: BeamState, design_fn, extract_fn,
 
     children: list[BeamState] = []
     for l_seq in candidates:
+        d_fasta = encode_fn(l_seq) if encode_fn is not None else to_d_fasta(l_seq)
         children.append(BeamState(
-            d_fasta=to_d_fasta(l_seq), coords=parent.coords, l_seq=l_seq,
+            d_fasta=d_fasta, coords=parent.coords, l_seq=l_seq,
             cif_path=None, iptm=0.0, chirality=0.0, composite=None,
             parent_id=parent.id, id=next_id(), cycle=parent.cycle + 1,
         ))
