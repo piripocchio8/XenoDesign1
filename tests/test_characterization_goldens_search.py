@@ -187,6 +187,7 @@ def _abc_fakes(monkeypatch):
 
 
 def test_golden_search_abc_a(tmp_path, monkeypatch):
+    monkeypatch.setenv("XENO_SEQ_STAGE", "1")   # S2.2: the corrected (real-known_seq) ABC-A is now the contract
     _abc_fakes(monkeypatch)
     cfg = resolve_config("cyclic", target_type="none", out_dir=str(tmp_path),
                          cli_overrides={"use_pepmlm": False, "use_pll": False,
