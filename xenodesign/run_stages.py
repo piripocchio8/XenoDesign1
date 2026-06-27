@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from typing import Optional
 
+from pathlib import Path
+
 from xenodesign.seq_stage import FrozenPosition
 
 
@@ -32,3 +34,28 @@ def frozen_from_coord_residues(coord_residues) -> set:
         chirality = t[3] if len(t) > 3 else None
         out.add(FrozenPosition(position0=pos0, identity=identity, chirality=chirality))
     return out
+
+
+def build_run_restraints(cfg, *, out_dir, case=None, target_ctx=None, roles=None):
+    """The spec §3.4 uniform restraint emitter: coordination + closure rows for ONE run, reusing the
+    cyclic class's metal/closure logic and the benchmark @atom covalent grammar.
+
+    Returns the written ``.restraints`` Path, or ``None`` when restraints are off. The metal case
+    (target_type != 'none' with declared coordinators) gets native-covalent ``@atom`` coordination
+    rows + a head-to-tail closure row; a non-metal cyclic gets closure-only. Delegates to the SAME
+    ``Cyclic.restraints`` hook the greedy path uses, so the rows are byte-identical across strategies
+    — the unification the spec asks for (ABC currently emits NONE of these).
+    """
+    if not getattr(cfg, "restraints_on", False):
+        return None
+
+    from xenodesign.benchmark.cases import get_case
+    from xenodesign.classes.cyclic import Cyclic
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    case = case or get_case("cyclic")
+    # Cyclic.restraints owns the metal-coordination + closure emission (and the declared-coordinator
+    # REQUIRE guard); it reads coord_residues + the closure default from cfg. target_ctx carries the
+    # assembled entity list when available (drives the Zn/binder chain split); None -> legacy order.
+    return Cyclic().restraints(cfg, case, out_dir, target_ctx)
