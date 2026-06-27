@@ -387,6 +387,33 @@ def greedy_iptm_accept(
     return _gate
 
 
+def alpha_demote_gated_accept(
+    max_helix_frac: float = 0.5,
+) -> Callable[["LoopStep", "LoopStep"], bool]:
+    """Factory for an ANTI-alpha (knottin / non_alpha) acceptance gate.
+
+    Returns ``accept_fn(candidate_step, current_step) -> bool`` that REJECTS a candidate whose
+    predicted binder helix fraction exceeds ``max_helix_frac`` — a knottin design that came out
+    over-helical is off-target. The helix fraction is read from
+    ``candidate_step.prediction.helix_fraction`` (the same forward CA-geometry helix the panel's
+    SS-bias term uses). An unreadable/missing helix is treated as register-achievable (accept) so a
+    parse failure never silently kills a trajectory — the gate only rejects a candidate it can
+    positively prove is too helical (symmetry with ``periodicity_gated_accept``).
+    """
+    def _gate(candidate_step: "LoopStep", current_step: "LoopStep") -> bool:
+        pred = getattr(candidate_step, "prediction", None)
+        helix = getattr(pred, "helix_fraction", None)
+        if helix is None:
+            return True
+        if float(helix) > max_helix_frac:
+            logger.info("alpha_demote_gated_accept: REJECT — helix %.3f > %.3f",
+                        float(helix), max_helix_frac)
+            return False
+        return True
+
+    return _gate
+
+
 def compose_accept_fns(
     *gates: Optional[Callable[["LoopStep", "LoopStep"], bool]],
 ) -> Optional[Callable[["LoopStep", "LoopStep"], bool]]:
