@@ -78,6 +78,7 @@ def _res_idx(one_letter: str, resnum: int) -> str:
 def contact_row(chain_a: str, resnum_a: int, chain_b: str, resnum_b: int,
                 confidence: float, max_distance: float, min_distance: float = 0.0,
                 res_one_letter_a: str = UNKNOWN_RES, res_one_letter_b: str = UNKNOWN_RES,
+                atom_a: str = '', atom_b: str = '',
                 comment: str = '', restraint_id: str = '') -> str:
     """An inter-chain CONTACT restraint row: residue (chain_a, resnum_a) within
     [min_distance, max_distance] A of residue (chain_b, resnum_b). Both endpoints are
@@ -85,15 +86,21 @@ def contact_row(chain_a: str, resnum_a: int, chain_b: str, resnum_b: int,
     contact restraints are inter-chain only.
 
     ``res_one_letter_a``/``res_one_letter_b`` are the residue ONE-LETTER identities
-    ('X' default => UNK when unknown at build time)."""
+    ('X' default => UNK when unknown at build time).
+
+    ATOM-AWARE contact (METAL-(b) STEP 3): when ``atom_a``/``atom_b`` are given the endpoint is
+    emitted as the chai token-atom form '<one-letter><pos>@<atom>' (e.g. 'H6@ND1', 'X1@ZN'). chai's
+    parser (``_parse_res_idx``) reads the '@atom' into ``PairwiseInteraction.atom_nameA/B`` so the
+    contact targets that specific atom. Omitted -> residue-level token (unchanged)."""
     if chain_a == chain_b:
         raise ValueError(
             f'contact restraints are INTER-chain only; got chainA==chainB=={chain_a!r} '
             f'(Chai is not trained on intra-chain bonds; use cyclization #23 instead)')
     _check_confidence(confidence)
+    tok_a = _res_idx(res_one_letter_a, resnum_a) + (f'@{atom_a}' if atom_a else '')
+    tok_b = _res_idx(res_one_letter_b, resnum_b) + (f'@{atom_b}' if atom_b else '')
     return ','.join([
-        chain_a, _res_idx(res_one_letter_a, resnum_a),
-        chain_b, _res_idx(res_one_letter_b, resnum_b),
+        chain_a, tok_a, chain_b, tok_b,
         'contact', str(float(confidence)), str(float(min_distance)),
         str(float(max_distance)), comment, restraint_id,
     ])
@@ -184,16 +191,20 @@ def metal_coordination_rows(params: dict) -> list:
       * ``his_resnums`` — the legacy His-only positions (each emitted with identity 'H'); used
         only when ``coord_residues`` is absent (the case default).
 
-    ATOM-SPECIFIC coordination (#1b): when a coordinator carries a liganding atom (the 5th tuple
-    element, e.g. 'ND1'/'SG'), the atom is RETAINED in ``items`` (a future patch will consume it),
-    but emitting an atom-level COVALENT bond to the metal is OFF BY DEFAULT
-    (``metal_covalent_atoms=False``). FIX A (stopgap): a covalent-to-metal row makes chai's
+    ATOM-SPECIFIC coordination (METAL-(b) solution (b)): when a coordinator carries a liganding
+    atom (the 5th tuple element, e.g. 'ND1'/'SG'/'OD1'), a SINGLE ATOM-AWARE CONTACT row is emitted
+    carrying ``atom_a`` (the coordinator's liganding atom) and ``atom_b`` (the metal atom, default
+    'ZN') — a real atom-specific dative coordination (His ND1 <-> Zn), NOT a covalent bond. The
+    metal must be fed as a CCD residue (targets/io_spec) so 'ZN' resolves to the cached-conformer
+    atom; with the SMILES form the atom is 'ZN1' and would not resolve. D coordinators are handled
+    the same (the dist patch relaxes the residue-name guard to position-only).
+
+    Coordination is DATIVE, so the covalent-to-metal path stays OFF by default
+    (``metal_covalent_atoms=False``): a covalent-to-metal row makes chai's
     ``get_atom_covalent_bond_pairs_from_constraints`` assert (the metal one-letter 'X'@ZN does not
-    resolve through the L-only name table), which CRASHES the run — GPU-confirmed. The residue-level
-    CONTACT row alone drives coordination correctly via the position-only ``token_dist`` patch. The
-    covalent-to-metal row is emitted ONLY when ``metal_covalent_atoms=True`` is passed explicitly
-    (kept for a future patch that resolves the metal atom safely). With NO atoms, behavior is
-    unchanged (pure contact)."""
+    resolve through the L-only name table), which CRASHES the run — GPU-confirmed. It is emitted
+    ONLY when ``metal_covalent_atoms=True`` is passed explicitly. With NO atoms, behavior is
+    unchanged (residue-level contact)."""
     metal_chain = params['metal_chain']
     metal_resnum = params['metal_resnum']
     coord_chain = params.get('his_chain') or params.get('coord_chain')
@@ -212,16 +223,19 @@ def metal_coordination_rows(params: dict) -> list:
             raise ValueError('metal_coordination_rows: no coord_residues or his_resnums provided')
         # Legacy His-only path: identity 'H', no atom, original 'His-Zn'/'zn_coord_<pos>'.
         items = [(int(hr), 'H', None, 'His-Zn', f'zn_coord_{int(hr)}') for hr in his_resnums]
-    # FIX A: covalent-to-metal emission is OFF by default (it crashes Chai's covalent-bond
-    # builder — the metal one-letter 'X'@ZN never resolves). The coordinator atom stays in
-    # ``items`` for a future patch; the bond only emits when explicitly opted in.
+    # Covalent-to-metal emission is OFF by default (it crashes Chai's covalent-bond builder — the
+    # metal one-letter 'X'@ZN never resolves). Coordination is dative; the atom-aware CONTACT below
+    # carries the liganding atom instead. The bond only emits when explicitly opted in.
     emit_covalent = bool(params.get('metal_covalent_atoms', False))
     rows = []
     for pos, one_letter, atom, comment, rid in items:
+        # Atom-aware contact when the coordinator declares a liganding atom: narrows the contact to
+        # <coord>@<atom> <-> <metal>@<metal_atom>. Residue-level otherwise (back-compat).
         rows.append(contact_row(
             chain_a=coord_chain, resnum_a=pos, chain_b=metal_chain, resnum_b=metal_resnum,
             confidence=params['confidence'], max_distance=params['max_distance'],
             res_one_letter_a=one_letter, res_one_letter_b=UNKNOWN_RES,
+            atom_a=(atom or ''), atom_b=(metal_atom if atom else ''),
             comment=comment, restraint_id=rid))
         if emit_covalent and atom:
             rows.append(covalent_bond_row(

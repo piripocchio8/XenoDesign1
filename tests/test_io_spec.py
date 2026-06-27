@@ -52,6 +52,21 @@ def test_build_fasta_ligand_ccd_entity():
     assert out == ">ligand|ccd=ZN\n"
 
 
+def test_build_fasta_metal_ccd_emits_name_form_for_patch():
+    """METAL-(b): a metal fed as a CCD residue is emitted as `>ligand|name=ZN` with the CCD code
+    on the sequence line — the form chai_patches._patch_ligand_ccd_feeding recognizes (entity name
+    AND sequence both the CCD code), so the metal tokenizes via the cached conformer (residue ZN,
+    atom ZN) instead of SMILES `[Zn+2]` (residue LIG, atom ZN1)."""
+    out = build_fasta([
+        {"type": "protein", "name": "binder", "sequence": "GH", "chirality": "L"},
+        {"type": "ligand", "name": "zn", "metal_ccd": "ZN"},
+    ])
+    assert out == (
+        ">protein|binder\nGH\n"
+        ">ligand|name=ZN\nZN\n"
+    )
+
+
 from xenodesign.io_spec import d_fasta_to_one_letter
 
 
