@@ -29,9 +29,13 @@ class _FakePred:
 
 
 def _drop_runspecific(report: dict) -> dict:
-    """Strip keys that are inherently run-specific (not behavior)."""
+    """Strip keys that are inherently run-specific (not behavior).
+
+    ``msa_dir`` is a machine-local path (produced by local_ref() on the host where the golden was
+    captured) and must not be committed to the golden — it would fail on any other machine.
+    """
     out = dict(report)
-    for k in ("wall_time_s", "out_dir", "constraint_path"):
+    for k in ("wall_time_s", "out_dir", "constraint_path", "msa_dir"):
         out.pop(k, None)
     return out
 
@@ -95,7 +99,8 @@ def test_golden_alpha_greedy(tmp_path, monkeypatch):
 
 import xenodesign.classes.non_alpha as nonalpha_mod
 
-_NONALPHA_SEED = "CDEFGHIKCLMNPCQRSTWYCVGC"   # 24-mer w/ Cys scaffold + Gly anchor (deterministic)
+_NONALPHA_SEED = "DEFCGHIKCLMNPCQRCSTVWYCDEDECFGG"   # 31-mer matching case binder_length=31; Cys at
+# 0-indexed positions [3,8,13,16,22,27] == knottin_cys_positions(31) [4,9,14,17,23,28]; C-term G
 
 
 def _nonalpha_fakes(monkeypatch):
