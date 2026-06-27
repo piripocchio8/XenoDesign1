@@ -97,6 +97,7 @@ def test_golden_alpha_greedy(tmp_path, monkeypatch):
     assert _drop_runspecific(json.loads(json.dumps(report, default=str))) == golden
 
 
+import xenodesign.classes._alpha_internals as ai_mod
 import xenodesign.classes.non_alpha as nonalpha_mod
 
 _NONALPHA_SEED = "DEFCGHIKCLMNPCQRCSTVWYCDEDECFGG"   # 31-mer matching case binder_length=31; Cys at
@@ -128,4 +129,71 @@ def test_golden_nonalpha_greedy(tmp_path, monkeypatch):
                                         "restraints_on": False, "loop.backend": "ligandmpnn"})
     report = dispatch.run_design(cfg)
     golden = _load_or_regold("nonalpha_greedy", report)
+    assert _drop_runspecific(json.loads(json.dumps(report, default=str))) == golden
+
+
+# ── S0.4 cyclic-metal greedy golden (coordinator/chirality path pinned) ───────────────────────────
+
+# The declared 6UFA coordinators as 5-tuples (pos, one_letter, three_letter, chirality, atom).
+# This is the EXACT in-memory format stored in cfg.restraint.params['coord_residues'] by the CLI.
+# Token meaning (from xenodesign.coordinators.parse_coord_residues):
+#   H6   -> (6,  'H', 'HIS', 'L', 'ND1')   L-His at position 6
+#   DHI12 -> (12, 'H', 'DHI', 'D', 'ND1')  D-His at position 12
+#   H18   -> (18, 'H', 'HIS', 'L', 'ND1')  L-His at position 18
+#   DHI24 -> (24, 'H', 'DHI', 'D', 'ND1')  D-His at position 24
+def _cyclic_metal_coord_residues():
+    from xenodesign.coordinators import parse_coord_residues
+    return [(c.pos, c.one_letter, c.three_letter, c.chirality, c.atom)
+            for c in parse_coord_residues("H6,DHI12,H18,DHI24")]
+
+
+def _fake_ifold_backend(design_backbone, context_coords, context_elements,
+                        fixed_mask, temperature, num_seqs, known_seq=None):
+    """Deterministic InverseFoldingBackend: echo known_seq (the real evolving seq) so the
+    extract->known_seq->chirality round-trip is exercised without torch. Falls back to all-Ala."""
+    n = np.asarray(design_backbone).shape[0]
+    base = (known_seq or "A" * n)[:n].ljust(n, "A")
+    return [base for _ in range(num_seqs)]
+
+
+def _cyclic_metal_fakes(monkeypatch, tmp_path):
+    """Patch only the GPU/IO leaves; real Cyclic.seq_update + make_alpha_seq_update_fn run."""
+    monkeypatch.setattr(dispatch, "_ensure_patches", lambda: None)
+    monkeypatch.setattr(dispatch, "_make_predictor",
+                        lambda cfg: (_FakePred(), lambda *a, **k: _FakePred()))
+    monkeypatch.setattr("xenodesign.seed.reflect_binder_in_complex_from_cif",
+                        lambda *a, **k: np.zeros((3, 3)))
+    # _make_base_backend is resolved through _self() -> xenodesign.classes.alpha (public module).
+    # Patch on alpha_mod so shim._make_base_backend picks up the deterministic CPU stub.
+    monkeypatch.setattr(alpha_mod, "_make_base_backend",
+                        lambda backend="ligandmpnn": _fake_ifold_backend)
+    # _extract reads binder backbone + context from the per-iter CIF via:
+    #   backbone_by_residue_from_cif -> lazy-imported from xenodesign.eval.gate_tier0a
+    #   _backbone_array_from_residues -> direct call in _alpha_internals (NOT via _self())
+    #   _best_cif_path / _all_atoms_from_chain -> via _self() -> alpha_mod
+    dummy_cif = tmp_path / "iter.cif"
+    dummy_cif.write_text("")
+    # 24-residue cyclic backbone (matches DEFAULT_BINDER_LENGTH["cyclic"]=24; coordinators at 6,12,18,24).
+    monkeypatch.setattr("xenodesign.eval.gate_tier0a.backbone_by_residue_from_cif",
+                        lambda cif, chain: [object()] * 24)
+    monkeypatch.setattr(ai_mod, "_backbone_array_from_residues",
+                        lambda res: np.zeros((len(res), 4, 3)))
+    monkeypatch.setattr(alpha_mod, "_best_cif_path",
+                        lambda *a, **k: dummy_cif)
+    monkeypatch.setattr(alpha_mod, "_all_atoms_from_chain",
+                        lambda cif, chain: (np.zeros((0, 3)), []))
+
+
+def test_golden_cyclic_metal_greedy(tmp_path, monkeypatch):
+    _cyclic_metal_fakes(monkeypatch, tmp_path)
+    # coord_residues: the REAL in-memory 5-tuple format (pos, one_letter, three_letter, chirality, atom).
+    # mixed_chirality="none" overrides the cyclic preset default ("A") to force the greedy HalluLoop.
+    cfg = resolve_config(
+        "cyclic", target_type="metal", out_dir=str(tmp_path),
+        cli_overrides={"loop.iters": 2, "use_pepmlm": False, "use_pll": False,
+                       "restraints_on": False, "loop.backend": "ligandmpnn",
+                       "mixed_chirality": "none",
+                       "restraint.params": {"coord_residues": _cyclic_metal_coord_residues()}})
+    report = dispatch.run_design(cfg)
+    golden = _load_or_regold("cyclic_metal_greedy", report)
     assert _drop_runspecific(json.loads(json.dumps(report, default=str))) == golden

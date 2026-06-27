@@ -1,0 +1,20 @@
+{
+  "backbone_rmsd_to_deposit": null,
+  "baseline_backbone_rmsd": 1.0,
+  "case_id": "cyclic",
+  "closure": false,
+  "l_seed_iptm": 0.5,
+  "metal_geometry": {
+    "geometry": null,
+    "passed": true,
+    "perplexity": null
+  },
+  "n_iters": 2,
+  "phase": "linear+emergent-closure (mainchain head-to-tail closure opt-in)",
+  "restraints": false,
+  "selected_d_fasta": "(DAL)(DAL)(DAL)(DAL)(DAL)H(DAL)(DAL)(DAL)(DAL)(DAL)(DHI)(DAL)(DAL)(DAL)(DAL)(DAL)H(DAL)(DAL)(DAL)(DAL)(DAL)(DHI)",
+  "selected_iptm": 0.5,
+  "selected_ptm": null,
+  "termini_distance_closure_proxy": null,
+  "zn_coordination_geometry": null
+}
