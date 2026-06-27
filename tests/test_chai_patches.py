@@ -138,6 +138,112 @@ def test_patched_add_distance_restraint_applies_d_coordinator(monkeypatch):
     assert (out[:10, :10] == -1.0).all()                 # nothing else touched
 
 
+# ── METAL-(b) STEP 2: ATOM-AWARE token_dist (narrow a residue mask to one atom token) ──
+#
+# A residue tokenized PER-ATOM (a D residue, or a CCD metal/ligand) has one token PER ATOM, all
+# sharing the residue's (asym, residue_index). An atom-aware contact (His ND1 <-> Zn) must narrow
+# the residue mask down to the SINGLE token that IS that atom. _resolve_residue_mask gains an
+# OPTIONAL (token_atom_names, atom_name) pair: when supplied, the mask is intersected with the
+# atom-name match; when not, behaviour is unchanged (position/residue-only, back-compat).
+
+class _AtomNames:
+    """[n] atom-name table supporting boolean-mask + integer indexing (parallel to _Names)."""
+    def __init__(self, names):
+        self._names = list(names)
+
+    def __getitem__(self, key):
+        if isinstance(key, (int, np.integer)):
+            return self._names[int(key)]
+        return [self._names[i] for i, m in enumerate(np.asarray(key)) if m]
+
+
+def test_resolve_mask_atom_narrows_to_single_atom_token(monkeypatch):
+    """A per-atom His (10 atom-tokens, one residue_index) narrowed by atom 'ND1' selects the ONE
+    ND1 atom-token, not all 10."""
+    from xenodesign import chai_patches
+    _install_fake_chai(monkeypatch)
+    asym = np.array([1] * 10 + [2])
+    idx = np.array([1] * 10 + [1])
+    names = _Names(["DHI"] * 10 + ["LIG"])
+    atom_names = _AtomNames(
+        ["N", "CA", "C", "O", "CB", "CG", "ND1", "CD2", "CE1", "NE2"] + ["ZN"])
+    mask, name = chai_patches._resolve_residue_mask(
+        asym, idx, names, residue_asym_id=1, residue_index=1,
+        token_atom_names=atom_names, atom_name="ND1")
+    assert name == "DHI"
+    assert int(np.asarray(mask).sum()) == 1       # narrowed to the single ND1 atom-token
+    # and it IS the ND1 token (index 6).
+    assert bool(np.asarray(mask)[6]) is True
+
+
+def test_resolve_mask_no_atom_keeps_residue_level(monkeypatch):
+    """No atom supplied -> behaviour unchanged (whole-residue mask, all atom-tokens)."""
+    from xenodesign import chai_patches
+    _install_fake_chai(monkeypatch)
+    asym = np.array([1] * 10 + [2])
+    idx = np.array([1] * 10 + [1])
+    names = _Names(["DHI"] * 10 + ["LIG"])
+    mask, name = chai_patches._resolve_residue_mask(
+        asym, idx, names, residue_asym_id=1, residue_index=1)
+    assert name == "DHI" and int(np.asarray(mask).sum()) == 10
+
+
+def test_resolve_mask_metal_atom_narrows_to_zn_token(monkeypatch):
+    """The metal side: a CCD metal residue (atom ZN) narrowed by atom 'ZN' selects its token."""
+    from xenodesign import chai_patches
+    _install_fake_chai(monkeypatch)
+    asym = np.array([1, 2])
+    idx = np.array([1, 1])
+    names = _Names(["DHI", "ZN"])
+    atom_names = _AtomNames(["ND1", "ZN"])
+    mask, name = chai_patches._resolve_residue_mask(
+        asym, idx, names, residue_asym_id=2, residue_index=1,
+        token_atom_names=atom_names, atom_name="ZN")
+    assert name == "ZN" and int(np.asarray(mask).sum()) == 1
+    assert bool(np.asarray(mask)[1]) is True
+
+
+def test_resolve_mask_atom_not_found_raises(monkeypatch):
+    """An atom name that matches no token in the residue fails loudly (genuine error)."""
+    from xenodesign import chai_patches
+    _install_fake_chai(monkeypatch)
+    asym = np.array([1, 1]); idx = np.array([1, 1])
+    names = _Names(["DHI", "DHI"]); atom_names = _AtomNames(["N", "CA"])
+    with pytest.raises(AssertionError) as ei:
+        chai_patches._resolve_residue_mask(
+            asym, idx, names, residue_asym_id=1, residue_index=1,
+            token_atom_names=atom_names, atom_name="ND1")
+    assert "atom" in str(ei.value).lower()
+
+
+def test_patched_add_distance_restraint_atom_aware_contact(monkeypatch):
+    """End-to-end on the fake: an atom-aware contact (His ND1 <-> Zn) writes the restraint into
+    the (ND1-token x ZN-token) cell only, not the whole residue block."""
+    from xenodesign import chai_patches
+    monkeypatch.setattr(chai_patches, "_RELAXED", False, raising=False)
+    mod = _install_fake_chai(monkeypatch)
+    chai_patches._patch_dist_restraint_match()
+
+    # 11 tokens: asym1 D-His (10 atom-tokens), asym2 ZN (1 atom-token).
+    asym = _ivec([1] * 10 + [2]); idx = _ivec([1] * 10 + [1])
+    names = _Names(["DHI"] * 10 + ["ZN"])
+    atom_names = _AtomNames(
+        ["N", "CA", "C", "O", "CB", "CG", "ND1", "CD2", "CE1", "NE2"] + ["ZN"])
+    mat = np.full((11, 11), -1.0)
+    inst = mod.TokenDistanceRestraint()
+    out = inst.add_distance_restraint(
+        constraint_mat=mat, token_asym_id=asym, token_residue_index=idx,
+        token_residue_names=names,
+        left_residue_asym_id=1, right_residue_asym_id=2,
+        left_residue_index=1, right_residue_index=1,
+        left_residue_name="HIS", right_residue_name="X",
+        distance_threshold=2.6,
+        token_atom_names=atom_names, left_atom_name="ND1", right_atom_name="ZN")
+    # only the (ND1=token6, ZN=token10) cell is set.
+    assert out[6, 10] == 2.6
+    assert (np.delete(np.delete(out, 6, axis=0), 10, axis=1) == -1.0).all()
+
+
 def _install_fake_residue_constants(monkeypatch):
     """Minimal chai_lab.data.residue_constants with the L one-letter -> 3-letter table."""
     import types

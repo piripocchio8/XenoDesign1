@@ -33,18 +33,26 @@ _RELAXED = False
 
 
 def _resolve_residue_mask(token_asym_id, token_residue_index, token_residue_names,
-                          residue_asym_id, residue_index):
+                          residue_asym_id, residue_index,
+                          token_atom_names=None, atom_name=None):
     """Return (mask, residue_name) for the residue at (asym, residue_index).
 
     Pure logic shared by the patched ``add_distance_restraint`` and the CPU unit test.
     ``token_*`` are 1-D tensors (or array-likes supporting ``==``/``&``/boolean indexing);
     ``token_residue_names`` is ``[n, 8]`` uint8 tensorcode (rows decodable by
     ``tensorcode_to_string``). The mask may select MULTIPLE tokens when the residue is a
-    D / non-canonical residue tokenized per-atom — that is fine AS LONG AS every matched
-    token decodes to the SAME residue name (one residue, many atoms). Returns the (possibly
-    multi-token) mask and the single decoded residue name. Raises ``AssertionError`` if no
+    D / non-canonical residue (or a CCD metal/ligand) tokenized per-atom — that is fine AS LONG AS
+    every matched token decodes to the SAME residue name (one residue, many atoms). Returns the
+    (possibly multi-token) mask and the single decoded residue name. Raises ``AssertionError`` if no
     token matches, or if the matched tokens span more than one distinct residue name (a truly
-    ambiguous restraint), so genuine errors still fail loudly rather than silently."""
+    ambiguous restraint), so genuine errors still fail loudly rather than silently.
+
+    ATOM-AWARE narrowing (METAL-(b) STEP 2): when both ``token_atom_names`` (a per-token atom-name
+    table, parallel to the token arrays — ``token_atom_names[i]`` is the atom name of token i) AND
+    ``atom_name`` are supplied, the residue mask is intersected with the atom-name match so it
+    selects the SINGLE atom-token that IS that atom (e.g. His ND1, or the metal's ZN). With no atom
+    supplied the mask stays whole-residue (back-compat). An atom name that matches no token within
+    the residue fails loudly (a genuine wiring error)."""
     from chai_lab.utils.tensor_utils import tensorcode_to_string
 
     asym_mask = token_asym_id == residue_asym_id
@@ -62,7 +70,33 @@ def _resolve_residue_mask(token_asym_id, token_residue_index, token_residue_name
         f"Restraint residue (asym={residue_asym_id}, index={residue_index}) is ambiguous: "
         f"matched {n_hit} tokens spanning residue names {sorted(names)} — refusing to apply."
     )
-    return mask, next(iter(names))
+    residue_name = next(iter(names))
+    if token_atom_names is not None and atom_name:
+        # Narrow the residue mask to the single token whose atom name IS ``atom_name``.
+        atom_hit = [bool(mask[i]) and (token_atom_names[i] == atom_name)
+                    for i in range(len(mask))]
+        n_atom = sum(1 for h in atom_hit if h)
+        assert n_atom >= 1, (
+            f"Atom {atom_name!r} not found in residue {residue_name} "
+            f"(asym={residue_asym_id}, index={residue_index}) — atom-aware restraint cannot apply."
+        )
+        # Rebuild the mask as an atom-narrowed mask preserving the original mask's type/ops.
+        mask = mask & _atom_name_mask(token_atom_names, atom_name, len(mask), mask)
+    return mask, residue_name
+
+
+def _atom_name_mask(token_atom_names, atom_name, n, like_mask):
+    """A boolean mask (same array type/ops as ``like_mask``) of tokens whose atom name == ``atom_name``.
+
+    Built per-element so it works against BOTH the real tensor atom-name table and the fake list-
+    backed table used in the CPU unit tests; the result is coerced to the same view as ``like_mask``
+    so ``&`` / ``.unsqueeze`` keep working downstream."""
+    import numpy as _np
+    hits = _np.array([bool(token_atom_names[i] == atom_name) for i in range(n)])
+    try:
+        return hits.view(type(like_mask))
+    except (TypeError, ValueError):
+        return hits
 
 
 def _patch_dist_restraint_match() -> None:  # pragma: no cover (gpu import)
@@ -73,6 +107,22 @@ def _patch_dist_restraint_match() -> None:  # pragma: no cover (gpu import)
     token, which fails for D-coordinators) and writes the restraint over the left x right
     atom-token outer product, using the actual decoded residue names (so the chirality
     name-guard is moot). Mirrors the position-only intent of ``_patch_pocket_name_check``.
+
+    METAL-(b) STEP 2: the replacement ALSO accepts an OPTIONAL per-token atom-name table
+    (``token_atom_names``) + a per-side atom name (``left_atom_name``/``right_atom_name``). When
+    supplied, the side's mask is narrowed to that single atom token (His ND1, metal ZN) for a real
+    atom-specific coordination contact; when omitted, behaviour is unchanged (whole-residue mask).
+    The narrowing logic is CPU-tested against fakes (tests/test_chai_patches.py).
+
+    GPU-INTEGRATION BOUNDARY (flagged for Marco): the stock chai CONTACT path
+    (``restraint_context.load_manual_restraints_for_chai1`` -> ``RestraintGroup`` ->
+    ``generate_from_restraint``) DROPS the parsed ``atom_nameA/atom_nameB`` and never passes a
+    per-token atom table into ``add_distance_restraint`` — so the new atom kwargs are not yet
+    fed by the live batch. Wiring them (preserve atoms in the ContactRestraint; build the token
+    atom-name table from the batch atom-level fields ``atom_ref_name``/``token_ref_atom_index``
+    and forward them) touches chai batch internals not exercisable on CPU; it is left for GPU
+    validation. Until wired, an atom-aware CONTACT file (STEP 3) still applies correctly at the
+    RESIDUE level via the existing per-atom narrowing (the atom only TIGHTENS the contact).
     """
     global _RELAXED
     from chai_lab.data.features.generators import token_dist_restraint as M
@@ -87,13 +137,20 @@ def _patch_dist_restraint_match() -> None:  # pragma: no cover (gpu import)
                                left_residue_asym_id, right_residue_asym_id,
                                left_residue_index, right_residue_index,
                                right_residue_name, left_residue_name,
-                               distance_threshold):
+                               distance_threshold,
+                               token_atom_names=None, left_atom_name=None,
+                               right_atom_name=None):
+        # ATOM-AWARE narrowing (METAL-(b) STEP 2): when a per-token atom-name table + a side's
+        # atom name are supplied, narrow that side's mask to the single atom token (His ND1, metal
+        # ZN, ...). Omitted -> whole-residue mask (back-compat, the D-coordinator repair path).
         left_mask, left_actual = _resolve_residue_mask(
             token_asym_id, token_residue_index, token_residue_names,
-            left_residue_asym_id, left_residue_index)
+            left_residue_asym_id, left_residue_index,
+            token_atom_names=token_atom_names, atom_name=left_atom_name)
         right_mask, right_actual = _resolve_residue_mask(
             token_asym_id, token_residue_index, token_residue_names,
-            right_residue_asym_id, right_residue_index)
+            right_residue_asym_id, right_residue_index,
+            token_atom_names=token_atom_names, atom_name=right_atom_name)
         n_left, n_right = int(left_mask.sum()), int(right_mask.sum())
         if n_left > 1 or n_right > 1 or left_actual != left_residue_name \
                 or right_actual != right_residue_name:
