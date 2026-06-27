@@ -134,7 +134,19 @@ class Cyclic:
         # entity list — the metal case legitimately passes target_ctx=None (legacy standalone
         # order) yet still needs the coordination rows.
         metal = cfg.target.target_type != "none"
-        closure = bool(cfg.restraint.params.get("closure"))
+        # REQUIRE declared coordinators for a metal target (#4): the liganding chemistry (which
+        # residues coordinate, with which atom + L/D handedness) must be declared via
+        # --coord_residues, not silently defaulted to the case His. Without them the atom-level
+        # COVALENT coordination rows cannot be built honestly.
+        if metal and not self._coord_residues(cfg):
+            raise ValueError(
+                "cyclic metal target requires declared coordinators: pass --coord_residues "
+                "(e.g. 'H6,DHI12,H18,DHI24') so the liganding atom + L/D chirality are explicit.")
+        # CYCLE BY DEFAULT for the METAL macrocycle (#3): a 6UFA analogue is a ring, so the
+        # head-to-tail closure rides WITH the coordination rows automatically. Keep an explicit
+        # disable path (restraint.params['closure']=False) for a LINEAR + emergent-closure run.
+        # The NO-TARGET free peptide stays the opt-in (default-off) closure case.
+        closure = bool(cfg.restraint.params.get("closure", metal))
         seed_result = self._seed_result(cfg, case) if closure else None
 
         if not metal:

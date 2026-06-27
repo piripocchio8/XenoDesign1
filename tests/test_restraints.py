@@ -177,6 +177,25 @@ def test_build_for_case_cyclic_uses_metal_coordination():
     assert [r.split(',')[1] for r in rows] == ['H6', 'H12', 'H18', 'H24']
 
 
+def test_build_cyclic_restraint_rows_preserves_atom_and_chirality():
+    # WT-RESTRAINTS #1+#2: build_cyclic_restraint_rows must pass the FULL coord tuple
+    # (pos, one_letter, three_letter, chirality, atom) through to metal_coordination_rows so
+    # (a) atom-level COVALENT His-ND1->Zn rows emit, and (b) the D coordinator's identity is
+    # not silently flattened to an L 2-tuple. Previously it truncated to (pos, one_letter).
+    from xenodesign.classes._cyclic_internals import build_cyclic_restraint_rows
+    case = get_case('cyclic')
+    coords = [(6, 'H', 'HIS', 'L', 'ND1'), (12, 'H', 'DHI', 'D', 'ND1')]
+    rows = build_cyclic_restraint_rows(case, his_chain='A', metal_chain='B',
+                                       coord_residues=coords)
+    contacts = [r for r in rows if ',contact,' in r]
+    covalents = [r for r in rows if ',covalent,' in r]
+    # atom-level covalent rows must now emit (the truncation killed them before).
+    assert len(contacts) == 2 and len(covalents) == 2
+    # The liganding atom (ND1) survived into the covalent token.
+    assert covalents[0].split(',')[1] == 'H6@ND1'
+    assert covalents[1].split(',')[1] == 'H12@ND1'  # D coordinator emits its covalent row too
+
+
 def test_build_for_case_nonalpha_shell_raises_pending_gate():
     import pytest
     with pytest.raises(ValueError) as ei:

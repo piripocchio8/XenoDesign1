@@ -176,7 +176,12 @@ def build_cyclic_restraint_rows(case, his_chain: str = "A", metal_chain: str = "
     p["his_chain"] = his_chain
     p["metal_chain"] = metal_chain
     if coord_residues:
-        p["coord_residues"] = [(int(t[0]), str(t[1])) for t in coord_residues]
+        # Pass the FULL coord tuple through (pos, one_letter, three_letter, chirality, atom).
+        # Truncating to (pos, one_letter) dropped the liganding atom (so the atom-level COVALENT
+        # rows never emitted) and the L/D chirality. metal_coordination_rows reads pos+one_letter
+        # (residue-level CONTACT) and the optional 5th-element atom (atom-level COVALENT); keeping
+        # the whole tuple revives the covalent path and preserves the declared D coordinators.
+        p["coord_residues"] = [tuple(t) for t in coord_residues]
     return metal_coordination_rows(p)
 
 

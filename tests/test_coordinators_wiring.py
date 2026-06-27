@@ -69,10 +69,12 @@ def test_declared_coordinators_drive_restraint_rows(tmp_path):
     path = c.restraints(cfg, get_case("cyclic"), tmp_path, target_ctx=None)
     rows = parse_restraints(path)
     # One contact per declared coordinator, at the declared positions, with REAL identities.
-    assert len(rows) == 3
-    coord_tokens = sorted(r["res_idxA"] for r in rows)
+    contacts = [r for r in rows if r["connection_type"] == "contact"]
+    assert len(contacts) == 3
+    coord_tokens = sorted(r["res_idxA"] for r in contacts)
     assert coord_tokens == ["C18", "H12", "H6"]
-    assert all(r["connection_type"] == "contact" for r in rows)
+    # WT-RESTRAINTS: the cyclic closure now rides along by default (auto-closure).
+    assert any(r["restraint_id"] == "head_to_tail" for r in rows)
 
 
 def test_metal_rows_declarative_overrides_his_resnums():
@@ -89,17 +91,26 @@ def test_metal_rows_declarative_overrides_his_resnums():
 
 # ── default fall-back: cyclic still works with case defaults when flag absent ──────
 
-def test_cyclic_defaults_unchanged_when_coord_residues_absent(tmp_path):
+def test_cyclic_seed_defaults_unchanged_when_coord_residues_absent(tmp_path):
+    """The SEED still falls back to the case His defaults when --coord_residues is absent
+    (the require-coord rule below is enforced only at restraint-emission time for a metal target)."""
     c = Cyclic()
     cfg = _cyclic_cfg(out_dir=str(tmp_path))
     spec = c.seed(cfg, target_seq=None)
     # Case-default His-only coordinators (6/12/18/24, L/D/L/D) — unchanged behaviour.
     assert spec.fixed_chirality == {6: "L", 12: "D", 18: "L", 24: "D"}
     assert len(spec.one_letter) == resolve_binder_length(cfg) == 24
-    path = c.restraints(cfg, get_case("cyclic"), tmp_path, target_ctx=None)
-    rows = parse_restraints(path)
-    assert [r["res_idxA"] for r in rows] == ["H6", "H12", "H18", "H24"]
-    assert all(r["comment"] == "His-Zn" for r in rows)
+
+
+def test_cyclic_metal_restraints_require_coord_residues(tmp_path):
+    """WT-RESTRAINTS #4: a metal cyclic restraint emission with NO declared --coord_residues now
+    raises (the liganding chemistry must be declared, not silently defaulted to the case His)."""
+    import pytest
+    c = Cyclic()
+    cfg = _cyclic_cfg(out_dir=str(tmp_path))
+    with pytest.raises(ValueError) as ei:
+        c.restraints(cfg, get_case("cyclic"), tmp_path, target_ctx=None)
+    assert "coord_residues" in str(ei.value)
 
 
 # ── seq-update: coordinators threaded so post-design identity/chirality is re-imposed ──

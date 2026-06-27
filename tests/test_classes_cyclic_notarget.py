@@ -74,7 +74,12 @@ def test_restraints_no_target_no_closure_is_none(tmp_path):
 
 def test_restraints_metal_path_unchanged(tmp_path):
     """Sanity: the metal (Zn present) path still emits coordination rows on chain B."""
-    cfg = resolve_config("cyclic", target_type="metal")
+    from xenodesign.coordinators import parse_coord_residues
+    coords = [(c.pos, c.one_letter, c.three_letter, c.chirality, c.atom)
+              for c in parse_coord_residues("H6,DHI12,H18,DHI24")]
+    cfg = resolve_config("cyclic", target_type="metal",
+                         cli_overrides={"use_pepmlm": False,
+                                        "restraint.params": {"coord_residues": coords}})
     case = get_case("cyclic")
     zn = [{"type": "ligand", "name": "zn"}]
     path = Cyclic().restraints(cfg, case, tmp_path, target_ctx=(zn, None))
