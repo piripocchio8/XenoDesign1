@@ -155,7 +155,7 @@ def test_make_alpha_seq_update_fn_carbonara_uses_carbonara_base(monkeypatch):
     """backend='carbonara' threads the CARBonAra adapter as the base into _cterm_gly_anchor."""
     seen = {}
 
-    def fake_anchor(base):
+    def fake_anchor(base, *_, **__):
         seen["base"] = base
         return base
 
@@ -169,7 +169,7 @@ def test_make_alpha_seq_update_fn_carbonara_uses_carbonara_base(monkeypatch):
 def test_make_alpha_seq_update_fn_ligandmpnn_uses_ligandmpnn_base(monkeypatch):
     seen = {}
 
-    def fake_anchor(base):
+    def fake_anchor(base, *_, **__):
         seen["base"] = base
         return base
 

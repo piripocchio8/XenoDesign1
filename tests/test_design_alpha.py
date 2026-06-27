@@ -84,6 +84,58 @@ def test_cterm_glycine_replaces_old_midpoint_behaviour():
     assert result[len(seq) // 2] != "G"      # the old midpoint slot is NOT a Gly
 
 
+# ── FIX B6: the C-term Gly anchor MUST NOT clobber a declared C-terminal coordinator ──
+
+def test_cterm_gly_anchor_skips_when_last_position_is_a_coordinator():
+    """B6: when the C-TERMINAL position is a DECLARED COORDINATOR (e.g. His24 in a 24-mer with
+    coord at 24), the anchor must NOT force it to 'G' nor mark it non-designable — the declared
+    donor identity survives instead of being overwritten (the iter_001 covalent-resolver crash)."""
+    captured = {}
+
+    def fake_backend(db, cc, ce, fixed_mask, temp, n, known_seq=None):
+        captured["fixed_mask"] = list(fixed_mask)
+        return ["KKKKH" for _ in range(n)]    # 5-mer, His at the C-term coordinator slot
+
+    # last position (index 4) is a declared coordinator.
+    wrapped = _cterm_gly_anchor(fake_backend, coordinator_positions={4})
+    out = wrapped(None, [], [], [False] * 5, 0.1, 3)
+    assert captured["fixed_mask"][-1] is False         # NOT forced non-designable
+    assert all(s[-1] == "H" for s in out)              # His coordinator preserved (not 'G')
+    assert all(s == "KKKKH" for s in out)              # whole candidate untouched
+
+
+def test_cterm_gly_anchor_still_forces_gly_for_non_coordinator_cterm():
+    """B6 back-compat: a NON-coordinator C-terminus still gets the forced Gly anchor (alpha
+    unchanged), even when OTHER (non-last) positions are coordinators."""
+    captured = {}
+
+    def fake_backend(db, cc, ce, fixed_mask, temp, n, known_seq=None):
+        captured["fixed_mask"] = list(fixed_mask)
+        return ["KKKKK" for _ in range(n)]    # 5-mer, last position is NOT a coordinator
+
+    # coordinators at positions 0 and 2 — the C-term (index 4) is NOT one.
+    wrapped = _cterm_gly_anchor(fake_backend, coordinator_positions={0, 2})
+    out = wrapped(None, [], [], [False] * 5, 0.1, 3)
+    assert captured["fixed_mask"][-1] is True          # C-terminal still non-designable
+    assert all(s[-1] == "G" for s in out)              # forced C-terminal Gly
+    assert all(s[:-1] == "KKKK" for s in out)
+
+
+def test_cterm_gly_anchor_default_no_coordinators_unchanged():
+    """B6 back-compat: with no coordinator_positions (alpha default) behaviour is byte-identical
+    to before — the C-term is forced Gly and non-designable."""
+    captured = {}
+
+    def fake_backend(db, cc, ce, fixed_mask, temp, n, known_seq=None):
+        captured["fixed_mask"] = list(fixed_mask)
+        return ["KKKKK" for _ in range(n)]
+
+    wrapped = _cterm_gly_anchor(fake_backend)
+    out = wrapped(None, [], [], [False] * 5, 0.1, 3)
+    assert captured["fixed_mask"][-1] is True
+    assert all(s[-1] == "G" for s in out)
+
+
 # ── build_alpha_seed (offline, use_pepmlm=False) ──────────────────────────────
 
 def test_build_alpha_seed_offline_len():

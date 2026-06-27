@@ -380,3 +380,166 @@ def test_closure_resolves_when_terminus_identity_drifts_from_seed():
     assert _covalent_match_by_name(closure_atom_c, "H") is False
     # Sanity: were the closure (wrongly) a side-chain bond, the stale name WOULD gate it.
     assert _covalent_match_by_name("SG", seed_n_term_one_letter) is True
+
+
+# ── GRACEFUL covalent resolver: a drifted endpoint SKIPS its bond (warns), never crashes ──
+#
+# The crux of the iter_001 crash: a side-chain coordination row (His@ND1 -> Zn) whose coordinator
+# residue DRIFTED during the loop (His -> Gly) no longer matches the side-chain NAME guard, so its
+# residue mask is empty -> stock chai asserts ``left_residue_idx.numel() > 0`` and the WHOLE predict
+# dies. The patched resolver must instead SKIP that one bond (with a warning) and return the
+# remaining resolvable bonds. We drive the REAL patched closure against a fake chai env (real torch,
+# fake chai_lab modules + a fake einops.rearrange) — no GPU.
+
+class _Constraint:
+    """A minimal stand-in for chai's PairwiseInteraction covalent constraint row."""
+    def __init__(self, *, chainA, res_idxA_pos, res_idxA_name, atom_nameA,
+                 chainB, res_idxB_pos, res_idxB_name, atom_nameB, connection_type):
+        self.chainA = chainA
+        self.res_idxA_pos = res_idxA_pos
+        self.res_idxA_name = res_idxA_name
+        self.atom_nameA = atom_nameA
+        self.chainB = chainB
+        self.res_idxB_pos = res_idxB_pos
+        self.res_idxB_name = res_idxB_name
+        self.atom_nameB = atom_nameB
+        self.connection_type = connection_type
+
+
+def _install_fake_covalent_chai(monkeypatch):
+    """Install fake chai_lab modules so ``_patch_covalent_bond_match`` imports + installs on CPU.
+
+    Uses REAL torch (available) but a fake ``einops.rearrange``, fake chai_lab submodules, a fake
+    residue_constants (CYS/HIS/ALA L 3-letter table), and a fake ``string_to_tensorcode`` that
+    encodes a residue 3-letter name into a fixed-width uint8 tensorcode row matching the token
+    residue-name table this test builds. Returns the fake bond_utils module (where the patch
+    installs the function) and a PairwiseInteractionType-like namespace."""
+    import torch
+
+    # einops.rearrange — only ``rearrange(tc, "d -> 1 d")`` is used: add a leading axis.
+    einops = types.ModuleType("einops")
+    einops.rearrange = lambda t, pattern: t.unsqueeze(0)
+    monkeypatch.setitem(sys.modules, "einops", einops)
+
+    # chai_lab package tree.
+    for full in ("chai_lab", "chai_lab.data", "chai_lab.data.dataset",
+                 "chai_lab.data.dataset.structure", "chai_lab.data.parsing",
+                 "chai_lab.model", "chai_lab.utils"):
+        monkeypatch.setitem(sys.modules, full,
+                            sys.modules.get(full) or types.ModuleType(full))
+
+    BU = types.ModuleType("chai_lab.data.dataset.structure.bond_utils")
+    monkeypatch.setitem(sys.modules, "chai_lab.data.dataset.structure.bond_utils", BU)
+    C = types.ModuleType("chai_lab.chai1")
+    monkeypatch.setitem(sys.modules, "chai_lab.chai1", C)
+
+    # PairwiseInteractionType enum (only COVALENT/CONTACT/POCKET identities are compared).
+    pit_mod = types.ModuleType("chai_lab.data.parsing.restraints")
+
+    class PairwiseInteractionType:
+        COVALENT = "COVALENT"
+        CONTACT = "CONTACT"
+        POCKET = "POCKET"
+
+    pit_mod.PairwiseInteractionType = PairwiseInteractionType
+    monkeypatch.setitem(sys.modules, "chai_lab.data.parsing.restraints", pit_mod)
+
+    # get_asym_id_from_subchain_id: our fake subchain ids ARE the asym ids.
+    mu_mod = types.ModuleType("chai_lab.model.utils")
+    mu_mod.get_asym_id_from_subchain_id = (
+        lambda *, subchain_id, source_pdb_chain_id, token_asym_id: subchain_id)
+    monkeypatch.setitem(sys.modules, "chai_lab.model.utils", mu_mod)
+
+    # residue_constants: L one-letter -> 3-letter (needed by _covalent_name_candidates).
+    rc = types.ModuleType("chai_lab.data.residue_constants")
+    rc.restype_1to3 = {"C": "CYS", "A": "ALA", "G": "GLY", "H": "HIS"}
+    monkeypatch.setitem(sys.modules, "chai_lab.data.residue_constants", rc)
+    monkeypatch.setattr(sys.modules["chai_lab.data"], "residue_constants", rc, raising=False)
+
+    # tensorcode encode/decode: a 3-letter name -> fixed-width [width] uint8 of ord()s, 0-padded.
+    _WIDTH = 8
+
+    def string_to_tensorcode(s, pad_to_length=_WIDTH):
+        vals = [ord(ch) for ch in s][:pad_to_length]
+        vals = vals + [0] * (pad_to_length - len(vals))
+        return torch.tensor(vals, dtype=torch.uint8)
+
+    tu = types.ModuleType("chai_lab.utils.tensor_utils")
+    tu.string_to_tensorcode = string_to_tensorcode
+    monkeypatch.setitem(sys.modules, "chai_lab.utils.tensor_utils", tu)
+
+    return BU, PairwiseInteractionType, string_to_tensorcode
+
+
+def _names_table(three_letter_names, string_to_tensorcode):
+    """Build the [n, width] uint8 token_residue_name tensor from per-token 3-letter names."""
+    import torch
+    return torch.stack([string_to_tensorcode(nm) for nm in three_letter_names])
+
+
+def test_covalent_resolver_skips_drifted_endpoint_without_crashing(monkeypatch):
+    """The iter_001 fix: a side-chain coordination bond whose coordinator residue DRIFTED
+    (His -> Gly) resolves to 0 tokens; the patched resolver SKIPS that bond (warns) and returns
+    the OTHER, resolvable bond — NO exception (stock would assert and kill the predict)."""
+    import torch
+    from xenodesign import chai_patches
+
+    BU, PIT, s2t = _install_fake_covalent_chai(monkeypatch)
+    chai_patches._patch_covalent_bond_match()
+    fn = BU.get_atom_covalent_bond_pairs_from_constraints
+
+    # Token layout (5 tokens, all in asym 1):
+    #   idx0 CYS res0 atoms SG  -> a resolvable disulfide partner
+    #   idx1 CYS res1 atoms SG  -> the disulfide's other end (resolvable)
+    #   idx2 GLY res2 (drifted from His) atom N  -> coordination row references HIS@ND1 here
+    #   idx3 ALA res3 atom CA
+    #   idx4 ALA res4 atom CA
+    names = _names_table(["CYS", "CYS", "GLY", "ALA", "ALA"], s2t)
+    token_residue_index = torch.tensor([0, 1, 2, 3, 4])
+    token_asym_id = torch.tensor([1, 1, 1, 1, 1])
+    token_subchain_id = ["A", "A", "A", "A", "A"]
+    atom_token_index = torch.tensor([0, 1, 2, 3, 4])
+    atom_ref_name = ["SG", "SG", "ND1", "CA", "CA"]
+
+    # Bond 1 (RESOLVABLE): C0@SG -> C1@SG disulfide (both CYS, side-chain name guard passes).
+    good = _Constraint(chainA=1, res_idxA_pos=1, res_idxA_name="C", atom_nameA="SG",
+                       chainB=1, res_idxB_pos=2, res_idxB_name="C", atom_nameB="SG",
+                       connection_type=PIT.COVALENT)
+    # Bond 2 (DRIFTED): His@ND1 at res index 2 (1-based pos 3) -> but res2 is now GLY, so the
+    # His side-chain NAME guard filters out every token -> left_residue_idx empty -> stock crash.
+    drifted = _Constraint(chainA=1, res_idxA_pos=3, res_idxA_name="H", atom_nameA="ND1",
+                          chainB=1, res_idxB_pos=4, res_idxB_name="A", atom_nameB="CA",
+                          connection_type=PIT.COVALENT)
+
+    a, b = fn([good, drifted], token_residue_index, names, token_subchain_id,
+              token_asym_id, atom_token_index, atom_ref_name)
+    # Exactly the ONE resolvable disulfide survived; the drifted coordination bond was skipped.
+    assert a.tolist() == [0]
+    assert b.tolist() == [1]
+
+
+def test_covalent_resolver_all_resolvable_unchanged(monkeypatch):
+    """Back-compat: when BOTH endpoints resolve, the resolver returns the bond exactly as before
+    (no skip, no warning path)."""
+    import torch
+    from xenodesign import chai_patches
+
+    BU, PIT, s2t = _install_fake_covalent_chai(monkeypatch)
+    chai_patches._patch_covalent_bond_match()
+    fn = BU.get_atom_covalent_bond_pairs_from_constraints
+
+    names = _names_table(["CYS", "CYS"], s2t)
+    token_residue_index = torch.tensor([0, 1])
+    token_asym_id = torch.tensor([1, 1])
+    token_subchain_id = ["A", "A"]
+    atom_token_index = torch.tensor([0, 1])
+    atom_ref_name = ["SG", "SG"]
+
+    good = _Constraint(chainA=1, res_idxA_pos=1, res_idxA_name="C", atom_nameA="SG",
+                       chainB=1, res_idxB_pos=2, res_idxB_name="C", atom_nameB="SG",
+                       connection_type=PIT.COVALENT)
+
+    a, b = fn([good], token_residue_index, names, token_subchain_id,
+              token_asym_id, atom_token_index, atom_ref_name)
+    assert a.tolist() == [0]
+    assert b.tolist() == [1]

@@ -335,7 +335,22 @@ def _patch_covalent_bond_match() -> None:  # pragma: no cover (gpu import)
                 right_residue_mask &= _name_mask(constraint.res_idxB_name, token_residue_name)
             left_residue_idx = torch.where(left_residue_mask)[0]
             right_residue_idx = torch.where(right_residue_mask)[0]
-            assert left_residue_idx.numel() > 0 and right_residue_idx.numel() > 0
+            # GRACEFUL DEGRADE (B6 sibling): a covalent endpoint that resolves to ZERO tokens must
+            # NOT crash the whole predict. This happens when a DECLARED coordinator drifts during the
+            # loop (e.g. the C-term His is rewritten to Gly), so the side-chain name guard filters out
+            # every token and the row references a residue/atom that no longer exists. Instead of the
+            # hard assert, SKIP that one bond (warn, naming the unresolved constraint) and keep the
+            # remaining resolvable bonds — a single drifted coordinator degrades gracefully. Both
+            # sides resolving is unchanged (the bond is built exactly as before).
+            if left_residue_idx.numel() == 0 or right_residue_idx.numel() == 0:
+                print(f"[patch] WARNING: covalent bond skipped — unresolved endpoint "
+                      f"({constraint.chainA}/{constraint.res_idxA_pos}@{constraint.atom_nameA} -> "
+                      f"{constraint.chainB}/{constraint.res_idxB_pos}@{constraint.atom_nameB}): "
+                      f"left {int(left_residue_idx.numel())} token(s), "
+                      f"right {int(right_residue_idx.numel())} token(s). "
+                      f"A declared coordinator likely drifted; continuing with remaining bonds.",
+                      flush=True)
+                continue
             left_atoms_mask = torch.isin(atom_token_index, test_elements=left_residue_idx)
             right_atoms_mask = torch.isin(atom_token_index, test_elements=right_residue_idx)
             assert torch.any(left_atoms_mask) and torch.any(right_atoms_mask)

@@ -107,7 +107,7 @@ def _run_extract(monkeypatch, roles, binder_len):
                         fake_make_seq_update_fn)
     # MultiCandidate / base backend must not actually run inverse folding.
     monkeypatch.setattr(shim, "_make_base_backend", lambda backend: (lambda *a, **k: "G"))
-    monkeypatch.setattr(shim, "_cterm_gly_anchor", lambda base: base)
+    monkeypatch.setattr(shim, "_cterm_gly_anchor", lambda base, *_, **__: base)
 
     fn = alpha_mod.make_alpha_seq_update_fn(_FakeWrapper("/fake/out"), num_seqs=1, roles=roles)
     fn(object())  # drive _extract
@@ -155,7 +155,7 @@ def test_extract_default_roles_is_alpha_B(monkeypatch):
     monkeypatch.setattr(alpha_mod, "_all_atoms_from_chain",
                         lambda cif, chain: (np.zeros((1, 3)), ["C"]))
     monkeypatch.setattr(shim, "_make_base_backend", lambda backend: (lambda *a, **k: "G"))
-    monkeypatch.setattr(shim, "_cterm_gly_anchor", lambda base: base)
+    monkeypatch.setattr(shim, "_cterm_gly_anchor", lambda base, *_, **__: base)
 
     captured = {}
 
