@@ -83,6 +83,7 @@ def make_abc_fitness(
     closure: bool = True,
     chain_name: str = "A",
     out_root: "str | Path | None" = None,
+    coord_restraint_rows: "list[str] | None" = None,
 ):
     """Build ``fitness(sequence, chirality_pattern) -> float`` over a fast Chai predict.
 
@@ -102,6 +103,10 @@ def make_abc_fitness(
         closure: emit + pass the head-to-tail closure restraint (default True).
         chain_name: the peptide chain letter (default ``"A"`` — single-chain mixed-chirality).
         out_root: where per-evaluation chai dirs are written (default a temp dir per call).
+        coord_restraint_rows: optional list of pre-built CSV restraint rows (strings, no header)
+            from ``build_run_restraints`` (S3a.2a).  When given, these rows are written to the
+            same restraints file as the closure row, BEFORE the closure row (coordination first,
+            then cyclization).  ``None`` → legacy behaviour (closure-only when ``closure=True``).
 
     Returns:
         ``fitness(sequence, chirality_pattern) -> float`` (``-inf`` on any failure).
@@ -155,8 +160,16 @@ def make_abc_fitness(
             out_dir.mkdir(parents=True, exist_ok=True)
 
             constraint_path = None
-            if closure:
-                constraint_path = _closure_restraint_path(sequence, out_dir, chain=chain_name)
+            if closure or coord_restraint_rows:
+                from xenodesign.benchmark.restraints import write_restraints
+                from xenodesign.classes.cyclic import build_closure_row
+                from types import SimpleNamespace
+                rows = list(coord_restraint_rows or [])
+                if closure:
+                    rows.append(build_closure_row(
+                        SimpleNamespace(one_letter=sequence), chain=chain_name))
+                constraint_path = write_restraints(
+                    out_dir / "abc_eval.restraints", rows)
 
             entities = [
                 {"type": "protein", "name": "binder", "sequence": d_fasta, "chirality": "L"},
