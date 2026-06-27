@@ -119,9 +119,21 @@ def make_abc_fitness(
         # (FIX 1). Cleared up-front so a failed eval never re-publishes a stale structure.
         fitness.last_structure = None
         try:
+            # S2.3: canonical-residue anchor (invariant #3) — an all-D chain crashes Chai
+            # tokenization; ensure >=1 canonical residue (a C-terminal Gly when no L/Gly present)
+            # before the emit. Variant-agnostic (acts on the chain ABOUT to be encoded). Flag off
+            # keeps the legacy emit byte-identical. frozen positions are not pinned here (the
+            # fitness has no coordinator set in scope — S3's restraints unification threads them);
+            # for S2 the anchor's own frozen=set() default is correct for the no-coordinator case.
+            import os
+            seq_for_emit = sequence
+            if os.environ.get("XENO_SEQ_STAGE", "0") != "0":
+                from xenodesign.seq_stage import SequenceUpdate
+                seq_for_emit = SequenceUpdate().ensure_canonical_anchor(
+                    sequence, chirality_pattern=dict(chirality_pattern))
             # Per-position-handedness emit (T1): 0-based pattern → 1-based for mixed_chirality_fasta.
             fixed_chirality = {pos + 1: hand for pos, hand in chirality_pattern.items()}
-            d_fasta = mixed_chirality_fasta(sequence, fixed_chirality=fixed_chirality)
+            d_fasta = mixed_chirality_fasta(seq_for_emit, fixed_chirality=fixed_chirality)
 
             _counter["n"] += 1
             if base_out is not None:
