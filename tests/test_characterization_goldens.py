@@ -57,3 +57,37 @@ def test_golden_helper_roundtrips(tmp_path, monkeypatch):
     monkeypatch.setenv("XENO_REGOLD", "1")
     got = _load_or_regold("_helper_selftest", {"a": 1, "wall_time_s": 9.9})
     assert got == {"a": 1}            # run-specific key dropped, value round-tripped
+
+
+import xenodesign.classes.alpha as alpha_mod
+
+_ALPHA_SEED = "ACDEFGHIKLMNPQRSTVWYG"   # fixed 21-mer (ends in the Gly anchor)
+_ALPHA_TARGET = "GSHMKVLITGGAGFIGSHLVDRL"
+
+
+def _alpha_fakes(monkeypatch):
+    monkeypatch.setattr(dispatch, "_ensure_patches", lambda: None)
+    monkeypatch.setattr(dispatch, "_make_predictor",
+                        lambda cfg: (_FakePred(), lambda *a, **k: _FakePred()))
+    monkeypatch.setattr(dispatch, "target_entities",
+                        lambda cfg: ([{"type": "protein", "name": "target",
+                                       "sequence": _ALPHA_TARGET, "chirality": "L"}], None, None))
+    monkeypatch.setattr("xenodesign.seed.reflect_binder_in_complex_from_cif",
+                        lambda *a, **k: np.zeros((3, 3)))
+    monkeypatch.setattr(alpha_mod.Alpha, "seed",
+                        lambda self, cfg, target_seq: __import__(
+                            "xenodesign.classes.base", fromlist=["SeedSpec"]
+                        ).SeedSpec(one_letter=_ALPHA_SEED))
+    # Deterministic seq-update: re-emit the seed every iteration (no MPNN/GPU).
+    monkeypatch.setattr(alpha_mod, "make_alpha_seq_update_fn",
+                        lambda wrapper, **k: (lambda pred: _ALPHA_SEED))
+
+
+def test_golden_alpha_greedy(tmp_path, monkeypatch):
+    _alpha_fakes(monkeypatch)
+    cfg = resolve_config("alpha", target_type="protein", out_dir=str(tmp_path),
+                         cli_overrides={"loop.iters": 2, "use_pepmlm": False, "use_pll": False,
+                                        "restraints_on": False, "loop.backend": "ligandmpnn"})
+    report = dispatch.run_design(cfg)
+    golden = _load_or_regold("alpha_greedy", report)
+    assert _drop_runspecific(json.loads(json.dumps(report, default=str))) == golden

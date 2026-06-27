@@ -1,0 +1,52 @@
+{
+  "backend": "ligandmpnn",
+  "baseline": {
+    "chirality": 0.0,
+    "interface_iptm": 0.44,
+    "ipae": 12.2
+  },
+  "beats_baseline": false,
+  "beats_baseline_full": false,
+  "case_id": "alpha",
+  "chirality_gate": false,
+  "heptad_thresh": 0.35,
+  "l_seed_iptm": 0.5,
+  "metrics": null,
+  "mixed_selection": null,
+  "n_iters": 2,
+  "num_seqs": 8,
+  "objective": "iptm",
+  "panel_fallback_used": true,
+  "periodicity_gate": false,
+  "ref_time_steps": 50,
+  "restraints": false,
+  "selected_chirality": 1.0,
+  "selected_composite": 0.0,
+  "selected_d_fasta": "(DAL)(DCY)(DAS)(DGL)(DPN)G(DHI)(DIL)(DLY)(DLE)(MED)(DSG)(DPR)(DGN)(DAR)(DSN)(DTH)(DVA)(DTR)(DTY)G",
+  "selected_iptm": 0.5,
+  "selected_iter": 0,
+  "selected_l_seq": "ACDEFGHIKLMNPQRSTVWYG",
+  "trajectory": [
+    {
+      "chirality": 1.0,
+      "composite": 0.0,
+      "d_fasta": "(DAL)(DCY)(DAS)(DGL)(DPN)G(DHI)(DIL)(DLY)(DLE)(MED)(DSG)(DPR)(DGN)(DAR)(DSN)(DTH)(DVA)(DTR)(DTY)G",
+      "iptm": 0.5,
+      "iter": 0,
+      "l_seq": "ACDEFGHIKLMNPQRSTVWYG",
+      "score": 0.65,
+      "vetoed": true
+    },
+    {
+      "chirality": 1.0,
+      "composite": 0.0,
+      "d_fasta": "(DAL)(DCY)(DAS)(DGL)(DPN)G(DHI)(DIL)(DLY)(DLE)(MED)(DSG)(DPR)(DGN)(DAR)(DSN)(DTH)(DVA)(DTR)(DTY)G",
+      "iptm": 0.5,
+      "iter": 1,
+      "l_seq": "ACDEFGHIKLMNPQRSTVWYG",
+      "score": 0.65,
+      "vetoed": true
+    }
+  ],
+  "use_pll": false
+}
