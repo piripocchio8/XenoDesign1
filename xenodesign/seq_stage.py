@@ -33,3 +33,18 @@ class SequenceUpdate:
         self.frozen = set(frozen or ())
         self.num_seqs = int(num_seqs)
         self._design_fn = design_fn
+
+    def build_known_seq(self, prev_l_seq: str, frozen=None) -> str:
+        """Invariant #1 (real evolving context) + frozen-identity override.
+
+        Start from the REAL previous-iteration L sequence (each char a one-letter L residue, the
+        chirality-agnostic L projection of whatever the CIF held), then stamp any frozen position's
+        declared identity over it. This is what becomes the backend's `known_seq` so fixed positions
+        keep their donor identity and FREE positions condition on real context — replacing the
+        all-Ala `design_codes=["DAL"]*n` starvation (root cause: _alpha_internals.py:472).
+        """
+        chars = list(prev_l_seq)
+        for fp in (frozen if frozen is not None else self.frozen):
+            if fp.identity is not None and 0 <= fp.position0 < len(chars):
+                chars[fp.position0] = fp.identity.upper()
+        return "".join(chars)
