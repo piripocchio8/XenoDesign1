@@ -274,7 +274,9 @@ def beam_search(seed: BeamState, design_fn, predict_fn, extract_fn, referee_fn, 
                 cycles: int = _DEFAULT_CYCLES, cost: Optional[CostAccount] = None,
                 anchor_fn: Optional[Callable] = None, dedup_on: bool = True,
                 ref_time_steps: int = 50, out_dir="/tmp/beam",
-                next_id: Optional[Callable[[], int]] = None):
+                next_id: Optional[Callable[[], int]] = None,
+                known_seq_fn: Optional[Callable] = None,
+                encode_fn: Optional[Callable] = None):
     """Run the beam search and return ``(pool, cost)``.
 
     The seed is predicted once (1 predict), then ``cycles`` cycles each expand the live beam,
@@ -308,7 +310,7 @@ def beam_search(seed: BeamState, design_fn, predict_fn, extract_fn, referee_fn, 
         children: list[BeamState] = []
         for parent in beam:
             kids = expand_state(parent, design_fn, extract_fn, anchor_fn=anchor_fn,
-                                next_id=next_id)
+                                next_id=next_id, known_seq_fn=known_seq_fn, encode_fn=encode_fn)
             if dedup_on:
                 kids = dedup(kids, seen, parent_l_seq=parent.l_seq, cost=cost)
             children.extend(kids)

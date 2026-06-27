@@ -1,10 +1,11 @@
 """S2.1: beam.expand_state threads a real known_seq + stage-encode when injected (flag-on path);
-with no injection it is byte-identical to the legacy all-Ala expansion."""
+with no injection it is byte-identical to the legacy all-Ala expansion.
+S2.1.2: beam_search forwards known_seq_fn/encode_fn to expand_state."""
 from __future__ import annotations
 
 import numpy as np
 
-from xenodesign.beam import BeamState, expand_state
+from xenodesign.beam import BeamState, CostAccount, beam_search, expand_state
 
 
 def _extract(parent):
@@ -43,3 +44,24 @@ def test_expand_state_threads_known_seq_and_encode(monkeypatch):
     assert seen["known_seq"] == "MKWV"               # REAL evolving seq threaded (invariant #1)
     assert kids[0].l_seq == "MKWV"                   # echoed by the design_fn
     assert kids[0].d_fasta == "<MKWV>"               # emitted via the injected stage encode
+
+
+def test_beam_search_forwards_known_seq_fn(monkeypatch):
+    """beam_search threads known_seq_fn/encode_fn down to expand_state."""
+    seen = {}
+
+    def predict_fn(state, ref_time_steps, out_dir):
+        from tests.test_characterization_goldens import _FakePred
+        return _FakePred()
+
+    from xenodesign.judges.panel import JudgePanel, RefereeScore
+    panel = JudgePanel()
+    referee_fn = lambda c: RefereeScore(chirality_violation=0.0, iptm=0.5)
+    seed = BeamState(d_fasta="", coords=np.zeros((4, 3)), l_seq="MKWV", cycle=0, id=99)
+    pool, cost = beam_search(
+        seed, design_fn=_capturing_design_fn(seen), predict_fn=predict_fn,
+        extract_fn=_extract, referee_fn=referee_fn, panel=panel,
+        beam_width=1, children_per_branch=1, cycles=1, cost=CostAccount(),
+        known_seq_fn=lambda p: p.l_seq, encode_fn=lambda s: f"<{s}>",
+    )
+    assert seen.get("known_seq") == "MKWV"           # forwarded all the way to expand_state

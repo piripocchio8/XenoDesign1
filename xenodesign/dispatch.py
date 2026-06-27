@@ -193,6 +193,22 @@ def _run_beam(cls, cfg, loop, init, loop_dir, roles=None):  # pragma: no cover (
     panel = JudgePanel(ss_bias=cls.ss_bias(cfg, case))
     cost = CostAccount()
 
+    # S2.1: route the beam seq-update through SequenceUpdate when XENO_SEQ_STAGE != "0". The stage
+    # owns invariant #1 (real known_seq from parent.l_seq, replacing beam's all-Ala starvation) and
+    # invariant #2/#3 (chirality-correct + canonical-anchored d_fasta). frozen is empty for the
+    # alpha/non_alpha beam combinations (no declared coordinators); the cyclic-metal beam is not a
+    # shipped combination. Flag off => known_seq_fn/encode_fn stay None => byte-identical legacy.
+    import os
+    from xenodesign.seq_stage import SequenceUpdate
+    known_seq_fn = None
+    encode_fn = None
+    if os.environ.get("XENO_SEQ_STAGE", "0") != "0":
+        stage = SequenceUpdate(roles=roles, frozen=set(), num_seqs=cfg.loop.num_seqs)
+        known_seq_fn = lambda parent: stage.build_known_seq(prev_l_seq=parent.l_seq)
+        # Alpha/non_alpha beam is all-D (chirality_pattern=None): encode_fn anchors then all-D-encodes.
+        encode_fn = lambda l_seq: stage.encode_d_fasta(
+            stage.ensure_canonical_anchor(l_seq, chirality_pattern=None), chirality_pattern=None)
+
     # ── BEAM search over cfg.loop.beam_cycles cycles at width cfg.loop.beam_width ──
     seed_state = BeamState(d_fasta=init.d_fasta, coords=init.coords, cycle=0)
     pool, cost = beam_search(
@@ -201,6 +217,7 @@ def _run_beam(cls, cfg, loop, init, loop_dir, roles=None):  # pragma: no cover (
         children_per_branch=cfg.loop.beam_width, cycles=cfg.loop.beam_cycles, cost=cost,
         anchor_fn=_ensure_cterm_glycine, ref_time_steps=cfg.loop.ref_time_steps,
         out_dir=loop_dir / "beam",
+        known_seq_fn=known_seq_fn, encode_fn=encode_fn,
     )
 
     # ── ANNEAL polish over the clean pool, reusing the class's anneal seq-update + objective ──
