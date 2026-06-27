@@ -87,6 +87,8 @@ class SequenceUpdate:
         d_fasta (invariant #2). frozen positions are forced fixed in the MPNN mask.
         """
         from xenodesign.inverse_folding import MultiCandidate
+        from xenodesign.io_spec import AA1_TO_AA3
+        from xenodesign.mirror import L_TO_D
         from xenodesign.scorer import sequence_quality_key
         from xenodesign.sequence_update import SequenceUpdater
 
@@ -103,8 +105,6 @@ class SequenceUpdate:
             n = len(known)
             # design_codes carry the REAL identity (L-projected) per position so the SequenceUpdater
             # feeds it as known_seq — invariant #1. Frozen donors keep their declared handedness.
-            from xenodesign.io_spec import AA1_TO_AA3
-            from xenodesign.mirror import L_TO_D
             pat = dict(chirality_pattern or {})
             codes = []
             for i, ch in enumerate(known):
