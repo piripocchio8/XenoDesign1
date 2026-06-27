@@ -92,15 +92,25 @@ def test_cyclic_restraints_off_when_disabled():
     assert c.restraints(cfg, get_case("cyclic"), out_dir="/tmp", target_ctx=None) is None
 
 
+def _metal_coords():
+    """The declared 6UFA coordinators (required now for a metal cyclic run)."""
+    from xenodesign.coordinators import parse_coord_residues
+    return [(c.pos, c.one_letter, c.three_letter, c.chirality, c.atom)
+            for c in parse_coord_residues("H6,DHI12,H18,DHI24")]
+
+
 def test_cyclic_restraints_writes_metal_coordination(tmp_path):
     c = Cyclic()
-    cfg = resolve_config("cyclic", target_type="metal", out_dir=str(tmp_path))
+    cfg = resolve_config("cyclic", target_type="metal", out_dir=str(tmp_path),
+                         cli_overrides={"use_pepmlm": False,
+                                        "restraint.params": {"coord_residues": _metal_coords()}})
     path = c.restraints(cfg, get_case("cyclic"), out_dir=tmp_path, target_ctx=None)
     assert path is not None and path.exists()
     text = path.read_text()
     assert "contact" in text
-    # default (closure off): no covalent closure row
-    assert "covalent" not in text
+    # WT-RESTRAINTS: atom-level COVALENT coordination rows now emit (atoms carried through), and
+    # the cyclic closure rides along by default.
+    assert "metal_coord_" in text and ",covalent," in text and "cyclic_closure" in text
 
 
 def test_cyclic_restraints_chain_aware_binder_last(tmp_path):
@@ -108,14 +118,16 @@ def test_cyclic_restraints_chain_aware_binder_last(tmp_path):
     binder chain (B, last) and the Zn chain (A) — not the legacy peptide=A/Zn=B order. This is
     the dispatcher gap: binder appended LAST inverts Zn to chain A."""
     c = Cyclic()
-    cfg = resolve_config("cyclic", target_type="metal", out_dir=str(tmp_path))
+    cfg = resolve_config("cyclic", target_type="metal", out_dir=str(tmp_path),
+                         cli_overrides={"use_pepmlm": False,
+                                        "restraint.params": {"coord_residues": _metal_coords()}})
     zn = {"type": "ligand", "name": "zn", "smiles": "[Zn+2]"}
     path = c.restraints(cfg, get_case("cyclic"), out_dir=tmp_path, target_ctx=([zn], None))
-    rows = [r for r in path.read_text().splitlines() if "zn_coord" in r]
-    assert rows, "expected His-Zn contact rows"
+    rows = [r for r in path.read_text().splitlines() if "metal_coord" in r]
+    assert rows, "expected His-Zn coordination rows"
     for r in rows:
         f = r.split(",")
-        # contact_row columns: chainA, resA, chainB, resB, ... -> His on B (binder), Zn on A.
+        # contact/covalent columns: chainA, resA, chainB, resB, ... -> His on B (binder), Zn on A.
         assert f[0] == "B", f"His must be on the binder chain B, got {f[0]} in {r}"
         assert f[2] == "A", f"Zn must be on chain A, got {f[2]} in {r}"
 
@@ -123,9 +135,11 @@ def test_cyclic_restraints_chain_aware_binder_last(tmp_path):
 def test_cyclic_restraints_legacy_chains_without_ctx(tmp_path):
     """No target_ctx -> legacy standalone-driver order (peptide=A, Zn=B), unchanged."""
     c = Cyclic()
-    cfg = resolve_config("cyclic", target_type="metal", out_dir=str(tmp_path))
+    cfg = resolve_config("cyclic", target_type="metal", out_dir=str(tmp_path),
+                         cli_overrides={"use_pepmlm": False,
+                                        "restraint.params": {"coord_residues": _metal_coords()}})
     path = c.restraints(cfg, get_case("cyclic"), out_dir=tmp_path, target_ctx=None)
-    rows = [r for r in path.read_text().splitlines() if "zn_coord" in r]
+    rows = [r for r in path.read_text().splitlines() if "metal_coord" in r]
     assert rows
     for r in rows:
         f = r.split(",")
@@ -135,11 +149,66 @@ def test_cyclic_restraints_legacy_chains_without_ctx(tmp_path):
 def test_cyclic_restraints_appends_closure_when_requested(tmp_path):
     c = Cyclic()
     cfg = resolve_config("cyclic", target_type="metal", out_dir=str(tmp_path),
-                         cli_overrides={"restraint.params": {"closure": True},
+                         cli_overrides={"restraint.params": {"closure": True,
+                                                             "coord_residues": _metal_coords()},
                                         "use_pepmlm": False})
     path = c.restraints(cfg, get_case("cyclic"), out_dir=tmp_path, target_ctx=None)
     text = path.read_text()
     assert "covalent" in text and "cyclic_closure" in text
+
+
+# ── WT-RESTRAINTS: auto-closure + atom-level coordination + require-coord ──────────
+
+def _coord_tuples(spec):
+    """Parse a --coord_residues flag string into the stored 5-tuples (pos, one, three, chir, atom)."""
+    from xenodesign.coordinators import parse_coord_residues
+    return [(c.pos, c.one_letter, c.three_letter, c.chirality, c.atom)
+            for c in parse_coord_residues(spec)]
+
+
+def test_cyclic_metal_emits_coordination_and_closure_together(tmp_path):
+    """WT-RESTRAINTS #1+#3: a cyclic metal run (coord_residues with liganding atoms) must write
+    BOTH the 4 atom-level COVALENT coordination rows AND an auto head-to-tail closure row — the
+    6UFA analogue is a CYCLE, so closure rides WITH the coordination rows by default (no opt-in)."""
+    c = Cyclic()
+    coords = _coord_tuples("H6,DHI12,H18,DHI24")
+    cfg = resolve_config("cyclic", target_type="metal", out_dir=str(tmp_path),
+                         cli_overrides={"use_pepmlm": False,
+                                        "restraint.params": {"coord_residues": coords}})
+    path = c.restraints(cfg, get_case("cyclic"), out_dir=tmp_path, target_ctx=None)
+    text = path.read_text()
+    # 4 atom-level COVALENT His-ND1->Zn coordination rows (one per declared coordinator).
+    coord_covalents = [r for r in text.splitlines() if "metal_coord_" in r and ",covalent," in r]
+    assert len(coord_covalents) == 4, f"expected 4 covalent coordination rows, got {coord_covalents}"
+    # AND exactly one auto head-to-tail closure row, emitted WITHOUT any opt-in.
+    closures = [r for r in text.splitlines() if "cyclic_closure" in r]
+    assert len(closures) == 1, f"expected one auto-closure row, got {closures}"
+
+
+def test_cyclic_metal_requires_coord_residues(tmp_path):
+    """WT-RESTRAINTS #4: a cyclic METAL target with no declared --coord_residues must raise a
+    clear ValueError (the liganding chemistry must be declared, not silently defaulted)."""
+    import pytest
+    c = Cyclic()
+    cfg = resolve_config("cyclic", target_type="metal", out_dir=str(tmp_path),
+                         cli_overrides={"use_pepmlm": False})
+    with pytest.raises(ValueError) as ei:
+        c.restraints(cfg, get_case("cyclic"), out_dir=tmp_path, target_ctx=None)
+    assert "coord_residues" in str(ei.value)
+
+
+def test_cyclic_metal_closure_can_be_disabled(tmp_path):
+    """The auto-closure has a disable path (closure=False) for the LINEAR + emergent-closure run."""
+    c = Cyclic()
+    coords = _coord_tuples("H6,DHI12,H18,DHI24")
+    cfg = resolve_config("cyclic", target_type="metal", out_dir=str(tmp_path),
+                         cli_overrides={"use_pepmlm": False,
+                                        "restraint.params": {"coord_residues": coords,
+                                                             "closure": False}})
+    path = c.restraints(cfg, get_case("cyclic"), out_dir=tmp_path, target_ctx=None)
+    text = path.read_text()
+    assert "cyclic_closure" not in text          # closure suppressed
+    assert any("metal_coord_" in r for r in text.splitlines())  # coordination still emitted
 
 
 def test_cyclic_referee_is_noop():
