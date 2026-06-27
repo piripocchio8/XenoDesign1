@@ -99,6 +99,9 @@ def test_run_design_wires_hooks_with_mocked_predictor(tmp_path, monkeypatch):
 
 
 def test_run_design_calls_hooks_with_config_derived_args(tmp_path, monkeypatch):
+    # S3a.3d: cls.accept_fns is the LEGACY path (flag-off). Explicitly pin XENO_SEQ_STAGE=0
+    # so this legacy-hook-wiring contract is stable under flag-on test runs.
+    monkeypatch.delenv("XENO_SEQ_STAGE", raising=False)
     cfg = resolve_config("alpha", target_type="protein", out_dir=str(tmp_path),
                          cli_overrides={"loop.iters": 3, "use_pepmlm": False,
                                         "use_pll": False, "restraints_on": False})
@@ -112,7 +115,7 @@ def test_run_design_calls_hooks_with_config_derived_args(tmp_path, monkeypatch):
     assert fake.calls["seed"][1] == "AAAA"          # target_seq from target_entities[0]
     assert fake.calls["objective"][0] is cfg
     assert fake.calls["referee"][0] is cfg
-    assert fake.calls["accept_fns"][0] is cfg
+    assert fake.calls["accept_fns"][0] is cfg       # flag-off: cls.accept_fns is the gate source
     # restraints consulted only when restraints_on (here False) → not called.
     assert "restraints" not in fake.calls
     # report receives the full history (one step per iter).

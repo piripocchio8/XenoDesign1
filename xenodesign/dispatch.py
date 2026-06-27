@@ -471,12 +471,31 @@ def run_design(cfg: DesignConfig) -> dict:
     init = LoopState(d_fasta=_seed_d_fasta(seed_spec), coords=d_seed_coords)
     loop_dir = out_dir / "loop"
 
+    # S3a.3d: uniform gates — when XENO_SEQ_STAGE is on, compose the class gate WITH the metal /
+    # non_alpha / periodicity gates so EVERY greedy strategy is gated identically (spec §3 spine).
+    # Inject the REAL JudgePanel (helix score_fn reads from the wrapper's per-step CIF via
+    # make_helix_panel_for_gates) and the REAL last_out_dir_fn (wrapper.last_out_dir, same source
+    # the seq-update path uses) so both alpha_demote AND metalhawk gates actually bite.
+    # Flag off keeps cls.accept_fns(cfg) byte-identical (no behavior change when XENO_SEQ_STAGE=0).
+    # NOTE: beam composes its own gates inside _run_beam; threading accept_fn into beam is S4
+    # alongside the #17 wrapper fix — for S3a.3d the beam path keeps its current gate wiring.
+    import os
+    if os.environ.get("XENO_SEQ_STAGE", "0") != "0":
+        from xenodesign.run_stages import build_run_gates, make_helix_panel_for_gates
+        _last_out_dir_fn = lambda: wrapper.last_out_dir
+        _helix_panel = make_helix_panel_for_gates(_last_out_dir_fn, roles=roles)
+        accept_fn = build_run_gates(cfg, roles=roles,
+                                    panel=_helix_panel,
+                                    last_out_dir_fn=_last_out_dir_fn)
+    else:
+        accept_fn = cls.accept_fns(cfg)
+
     if cfg.loop.search == "beam":
         history = _run_beam(cls, cfg, loop, init, loop_dir, roles=roles)
     else:
         history = loop.run(init=init, iterations=cfg.loop.iters,
                            ref_time_steps=cfg.loop.ref_time_steps, out_dir=loop_dir,
-                           accept_fn=cls.accept_fns(cfg))
+                           accept_fn=accept_fn)
 
     # ── Referee + adversarial panel selection ──────────────────────────────────
     # Classes whose referee returns None per step (e.g. the cyclic recall case) get a neutral

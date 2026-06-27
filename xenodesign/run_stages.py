@@ -107,6 +107,39 @@ def build_run_gates(cfg, *, roles=None, panel=None, last_out_dir_fn=None):
     return compose_accept_fns(*gates)
 
 
+def make_helix_panel_for_gates(last_out_dir_fn, roles=None):
+    """Build a JudgePanel whose ``score_fn`` reads helix_fraction from the per-step CIF.
+
+    This is the REAL panel for ``alpha_demote_gated_accept`` in the greedy dispatch path
+    (S3a.3d).  The helix source mirrors ``_make_referee_fn`` / ``_binder_helix_fraction``:
+    read the binder chain's CA trace from the CIF that the wrapper just wrote and compute
+    ``secondary_structure.helix_fraction`` over it.
+
+    Args:
+        last_out_dir_fn: ``() -> Path`` — returns the most-recent per-step output dir.
+            The same lambda supplied to ``build_run_gates`` as ``last_out_dir_fn``.  The
+            wrapper records ``last_out_dir`` BEFORE calling the refine fn (i.e. before
+            ``accept_fn`` is called), so the CIF is present at call time.
+        roles: ChainRoles or None.  None → binder chain 'B' (alpha default).
+    """
+    from xenodesign.judges.panel import JudgePanel, RefereeScore
+
+    binder_chain = roles.binder if roles is not None else "B"
+
+    def _score(step):
+        """Return RefereeScore.helix_fraction from the last-written CIF (None on any failure)."""
+        try:
+            from xenodesign.cif_io import _best_cif_path
+            from xenodesign.classes._alpha_internals import _binder_helix_fraction
+            cif = _best_cif_path(last_out_dir_fn())
+            helix = _binder_helix_fraction(cif, chain=binder_chain)
+        except Exception:
+            helix = None  # never crash a trajectory — gate will accept on None
+        return RefereeScore(chirality_violation=0.0, iptm=0.0, helix_fraction=helix)
+
+    return JudgePanel(score_fn=_score)
+
+
 def _make_metalhawk_score_fn(cfg, last_out_dir_fn):
     """A ``score_fn(step) -> GateResult`` reading the step's predicted CIF and running the (best-
     effort, subprocess-isolated) MetalHawk geometry gate. ``last_out_dir_fn() -> dir`` locates the
