@@ -206,6 +206,14 @@ class DesignConfig:
     use_pll: bool = True
     restraints_on: bool = True
     binder_length: int = 0   # 0 = per-class default (resolve_binder_length); else clamp 6..50
+    # Mixed-chirality ABC switch (decoupled from the loop launcher --search). 'none' = run the
+    # greedy/beam HalluLoop (homochiral). 'A' = ABC chirality search + MPNN identity (Variant a);
+    # 'B' = ABC chirality+identity, MPNN warm-start only (Variant b). Activates ABC for ANY
+    # binder/target. Cyclic (mixed-chirality by definition) defaults to 'A' (see PRESETS).
+    mixed_chirality: str = "none"  # none|A|B
+
+
+VALID_MIXED_CHIRALITY = ("none", "A", "B")
 
 
 PRESETS: dict[str, DesignConfig] = {
@@ -226,7 +234,8 @@ PRESETS: dict[str, DesignConfig] = {
         target=TargetSpec(target_type="metal", smiles="[Zn+2]"),
         restraint=RestraintConfig(kind="metal_coordination"),
         gates=GateConfig(chirality=False, entropy=False, pll_veto=False),
-        objective="iptm"),
+        objective="iptm",
+        mixed_chirality="A"),  # cyclic = mixed-chirality by definition -> ABC Variant A default
 }
 
 
@@ -283,6 +292,9 @@ def resolve_config(binder_class: str, target_type: str | None = None,
             f"binder_length must be an int (0 = per-class default), got {cfg.binder_length!r}")
     if cfg.binder_length < 0:
         raise ValueError(f"binder_length must be >= 0, got {cfg.binder_length}")
+    if cfg.mixed_chirality not in VALID_MIXED_CHIRALITY:
+        raise ValueError(
+            f"mixed_chirality must be one of {VALID_MIXED_CHIRALITY}, got {cfg.mixed_chirality!r}")
     # NOTE: cfg.device is left as the unset sentinel here so config resolution stays
     # torch-free; the actual device is resolved at point-of-use (dispatch._make_predictor)
     # and baked into the provenance by dump_config().

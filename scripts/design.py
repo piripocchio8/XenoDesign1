@@ -29,7 +29,14 @@ def _parse_args(argv=None):
     p.add_argument("--pdb", default=None,
                    help="optional explicit target PDB (overrides the per-class case default)")
     p.add_argument("--search", choices=("greedy", "beam", "abc"), default=None,
-                   help="'abc' = mixed-chirality ABC search (cyclic + target_type none only)")
+                   help="HalluLoop launcher: greedy (default) or beam. "
+                        "DEPRECATED: 'abc' is back-compat for --mixed_chirality A "
+                        "(B if --abc_variant b); prefer --mixed_chirality.")
+    p.add_argument("--mixed_chirality", choices=("none", "A", "B"), default=None,
+                   help="mixed-chirality ABC search OVER the loop, for ANY binder/target: "
+                        "none = homochiral greedy/beam (default for alpha/non_alpha); "
+                        "A = ABC chirality + MPNN identity (Variant a; cyclic default); "
+                        "B = ABC chirality+identity, MPNN warm-start only (Variant b)")
     p.add_argument("--abc_variant", choices=("a", "b"), default=None,
                    help="ABC axis split: 'a' = search chirality + MPNN identity (default); "
                         "'b' = search identity+chirality, MPNN warm-start only")
@@ -70,8 +77,16 @@ def _overrides(a) -> dict:
     """Map the present CLI flags to dotted DesignConfig override keys (absent flags are omitted so
     the per-class PRESET / config-file value wins)."""
     o: dict = {}
-    if a.search is not None:
+    if a.search == "abc":
+        # BACK-COMPAT: the old `--search abc` launcher value is now a thin alias for the decoupled
+        # --mixed_chirality switch (A by default; B when --abc_variant b). It no longer sets
+        # loop.search (which is the greedy|beam launcher only).
+        print("NOTE: --search abc is deprecated; use --mixed_chirality {A,B}.", file=sys.stderr)
+        o["mixed_chirality"] = "B" if a.abc_variant == "b" else "A"
+    elif a.search is not None:
         o["loop.search"] = a.search
+    if a.mixed_chirality is not None:
+        o["mixed_chirality"] = a.mixed_chirality
     if a.abc_variant is not None:
         o["abc.variant"] = a.abc_variant
     if a.abc_cycles is not None:
