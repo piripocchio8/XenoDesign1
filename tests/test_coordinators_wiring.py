@@ -50,13 +50,18 @@ def test_declared_coordinators_generalize_beyond_his():
     assert spec.fixed_chirality == {4: "D", 9: "L", 15: "D"}
 
 
-def test_declared_coordinators_opt_in_off_when_restraints_off():
+def test_declared_coordinators_seed_even_when_restraints_off():
+    """OPT-IN restraints (Marco 2026-06-27): EXPLICIT --coord_residues still drive SEED placement
+    when restraints are OFF, so an UNGUIDED --no_restraints metal run still places the declared
+    donors (with their declared L/D). Only the RESTRAINT emission is gated by the toggle; the
+    case-His DEFAULT scaffold (no explicit coords) remains opt-in (see _no_default_his test)."""
     c = Cyclic()
     coords = _coords("H6,DHI12")
     cfg = _cyclic_cfg(restraints_on=False,
                       **{"restraint.params": {"coord_residues": coords}})
     spec = c.seed(cfg, target_seq=None)
-    assert spec.fixed_chirality == {}
+    assert spec.one_letter[5] == "H" and spec.one_letter[11] == "H"
+    assert spec.fixed_chirality == {6: "L", 12: "D"}
 
 
 # ── restraints: rows reference the declared coordinators (and their identities) ────

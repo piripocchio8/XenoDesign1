@@ -222,6 +222,60 @@ def test_cyclic_metal_closure_can_be_disabled(tmp_path):
     assert any("metal_coord_" in r for r in text.splitlines())  # coordination still emitted
 
 
+# ── OPT-IN RESTRAINTS: --no_restraints => fully UNGUIDED metal run ─────────────────
+
+def test_cyclic_metal_no_restraints_returns_none_without_coord(tmp_path):
+    """OPT-IN #2: a metal cyclic run with restraints OFF emits NO restraint file and does NOT
+    raise the require-coord error, EVEN with no --coord_residues declared. restraints OFF =>
+    fully UNGUIDED hallucination (just the Zn ligand + the seed)."""
+    c = Cyclic()
+    cfg = resolve_config("cyclic", target_type="metal", out_dir=str(tmp_path),
+                         cli_overrides={"use_pepmlm": False, "restraints_on": False})
+    # No ValueError even though metal + no coord_residues.
+    assert c.restraints(cfg, get_case("cyclic"), out_dir=tmp_path, target_ctx=None) is None
+
+
+def test_cyclic_metal_no_restraints_still_seeds_declared_coords(tmp_path):
+    """OPT-IN #1: --coord_residues still drives SEED placement even when restraints are OFF —
+    the declared His are inserted at their positions with their declared chirality. (The Zn-coord
+    + closure RESTRAINTS are skipped; only the seed scaffold from explicit coords survives.)"""
+    c = Cyclic()
+    coords = _coord_tuples("H6,DHI12,H18,DHI24")
+    cfg = resolve_config("cyclic", target_type="metal", out_dir=str(tmp_path),
+                         cli_overrides={"use_pepmlm": False, "restraints_on": False,
+                                        "restraint.params": {"coord_residues": coords}})
+    spec = c.seed(cfg, target_seq=None)
+    # Declared coordinators placed (His one-letter) at 1-based 6/12/18/24 regardless of restraints.
+    assert spec.one_letter[5] == "H" and spec.one_letter[11] == "H"
+    assert spec.one_letter[17] == "H" and spec.one_letter[23] == "H"
+    # Declared chirality survives: L@6/18, D@12/24.
+    assert spec.fixed_chirality.get(6) == "L" and spec.fixed_chirality.get(18) == "L"
+    assert spec.fixed_chirality.get(12) == "D" and spec.fixed_chirality.get(24) == "D"
+
+
+def test_cyclic_metal_no_restraints_no_default_his_scaffold(tmp_path):
+    """OPT-IN #1 (negative): with NO declared coords AND restraints OFF, the seed carries no
+    mandatory case-His scaffold — UNGUIDED means the default His are NOT pinned (only EXPLICIT
+    --coord_residues seed when off)."""
+    c = Cyclic()
+    cfg = resolve_config("cyclic", target_type="metal", out_dir=str(tmp_path),
+                         cli_overrides={"use_pepmlm": False, "restraints_on": False})
+    spec = c.seed(cfg, target_seq=None)
+    assert spec.fixed_chirality == {}
+
+
+def test_cyclic_metal_restraints_on_requires_coord_still_raises(tmp_path):
+    """OPT-IN #3 (regression): a GUIDED metal run (restraints ON) with no --coord_residues STILL
+    raises the require-coord ValueError — declaring coordinators is mandatory only when guiding."""
+    import pytest
+    c = Cyclic()
+    cfg = resolve_config("cyclic", target_type="metal", out_dir=str(tmp_path),
+                         cli_overrides={"use_pepmlm": False, "restraints_on": True})
+    with pytest.raises(ValueError) as ei:
+        c.restraints(cfg, get_case("cyclic"), out_dir=tmp_path, target_ctx=None)
+    assert "coord_residues" in str(ei.value)
+
+
 def test_cyclic_referee_is_noop():
     c = Cyclic()
     cfg = resolve_config("cyclic", target_type="metal")
