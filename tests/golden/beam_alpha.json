@@ -22,28 +22,28 @@
   "restraints": false,
   "selected_chirality": 1.0,
   "selected_composite": 0.0,
-  "selected_d_fasta": "(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)G",
+  "selected_d_fasta": "(DAL)(DCY)(DAS)(DGL)(DPN)G(DHI)(DIL)(DLY)(DLE)(MED)(DSG)(DPR)(DGN)(DAR)(DSN)(DTH)(DVA)(DTR)(DTY)G",
   "selected_iptm": 0.5,
   "selected_iter": 0,
-  "selected_l_seq": "AAAAAAAAAAAAAAAAAAAAG",
+  "selected_l_seq": "ACDEFGHIKLMNPQRSTVWYG",
   "trajectory": [
     {
       "chirality": 1.0,
       "composite": 0.0,
-      "d_fasta": "(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)G",
+      "d_fasta": "(DAL)(DCY)(DAS)(DGL)(DPN)G(DHI)(DIL)(DLY)(DLE)(MED)(DSG)(DPR)(DGN)(DAR)(DSN)(DTH)(DVA)(DTR)(DTY)G",
       "iptm": 0.5,
       "iter": 0,
-      "l_seq": "AAAAAAAAAAAAAAAAAAAAG",
+      "l_seq": "ACDEFGHIKLMNPQRSTVWYG",
       "score": 0.65,
       "vetoed": true
     },
     {
       "chirality": 1.0,
       "composite": 0.0,
-      "d_fasta": "(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)(DAL)G",
+      "d_fasta": "(DAL)(DCY)(DAS)(DGL)(DPN)G(DHI)(DIL)(DLY)(DLE)(MED)(DSG)(DPR)(DGN)(DAR)(DSN)(DTH)(DVA)(DTR)(DTY)G",
       "iptm": 0.5,
       "iter": 1,
-      "l_seq": "AAAAAAAAAAAAAAAAAAAAG",
+      "l_seq": "ACDEFGHIKLMNPQRSTVWYG",
       "score": 0.65,
       "vetoed": true
     }

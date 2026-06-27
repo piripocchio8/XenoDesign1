@@ -130,9 +130,17 @@ def _beam_fakes(monkeypatch, tmp_path):
                         lambda cif, chain: (np.zeros((0, 3)), []))
     monkeypatch.setattr(ai_mod, "_backbone_array_from_residues",
                         lambda res: np.zeros((len(res), 4, 3)))
+    # S2.1.3: the flag-ON stage path (_stage_extract in _alpha_internals.py) calls
+    # _self().binder_seq_from_cif (= alpha_mod.binder_seq_from_cif), which is different from the
+    # dab.binder_seq_from_cif already patched above (the beam referee's CIF reads come through dab;
+    # the anneal loop's _stage_extract reads come through alpha_mod). Patch both so the dummy empty
+    # CIF does not reach gemmi.read_structure under XENO_SEQ_STAGE=1.
+    monkeypatch.setattr(alpha_mod, "binder_seq_from_cif",
+                        lambda cif, chain: _BEAM_SEED)
 
 
 def test_golden_search_beam_alpha(tmp_path, monkeypatch):
+    monkeypatch.setenv("XENO_SEQ_STAGE", "1")   # S2.1: the corrected (real-known_seq) beam is now the contract
     _beam_fakes(monkeypatch, tmp_path)
     cfg = resolve_config("alpha", target_type="protein", out_dir=str(tmp_path),
                          cli_overrides={"use_pepmlm": False, "use_pll": False,
