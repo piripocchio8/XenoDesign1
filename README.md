@@ -46,6 +46,10 @@ chemistries, and search strategies through one shared loop.
 
 ## Quickstart
 
+> **No conda env to build.** The old BoltzDesign `setup.sh` (kept as
+> `setup_boltzdesign_legacy.sh` for reference only) is superseded by the self-contained
+> chai container — follow [`docker/README.md`](docker/README.md).
+
 ### 1. CPU test suite (no GPU, no Docker)
 
 The whole pure/CPU layer (config, seeding, gates, ABC engine, restraint builders, scorers) is
