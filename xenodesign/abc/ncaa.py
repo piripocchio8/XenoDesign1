@@ -39,6 +39,23 @@ DEFAULT_NCAA_PALETTE = ("AIB", "ORN", "NLE", "HYP")
 VALID_NCAA_DICT = ("d_only", "d_common", "all")
 
 
+def canonical_exclusion_set() -> set[str]:
+    """The CCD codes that are CANONICAL amino acids (20 standard L + every D-canonical).
+
+    These must NEVER be counted toward ``--ncaa_top_x``: the 20 standard L residues are not ncAA
+    at all, and the D-canonicals are ALWAYS fully included in ``d_common``/``all`` independently
+    (they ARE the ``d_only`` set). Excluding them from the MONDE-T ranking is what makes ``top_x``
+    apply only to the true non-canonical ncAA (Aib, L-ncAA, less-frequent D-ncAA).
+
+    Built from the project's own maps so it can never drift: ``AA1_TO_AA3`` (the 20 standard L
+    codes) and ``D_CANONICAL`` (the D-canonical codes). Glycine is achiral and has no D form, so
+    the D side has 19 codes; the L side always has 20.
+    """
+    from xenodesign.io_spec import AA1_TO_AA3
+
+    return set(AA1_TO_AA3.values()) | set(D_CANONICAL)
+
+
 def _is_wellformed(code: str) -> bool:
     """True iff ``code`` is a 3-letter alphanumeric CCD-style token (the ``(XXX)`` slot)."""
     return len(code) == 3 and code.isalnum()
@@ -87,20 +104,27 @@ def build_palette(ncaa_dict: str, ncaa_top_x: int = 20, csv_path=None) -> list[s
     """Build the effective Variant-B palette for an ``--ncaa_dict`` scope.
 
       - ``d_only``  -> the D-canonical set.
-      - ``d_common``-> D-canonical + top-``ncaa_top_x`` MONDE-T ncAA by entity_count.
-      - ``all``     -> D-canonical + ALL MONDE-T ncAA (no cap).
+      - ``d_common``-> D-canonical + top-``ncaa_top_x`` TRUE ncAA by entity_count.
+      - ``all``     -> D-canonical + ALL TRUE ncAA (no cap).
 
-    The result is de-duplicated, order-stable (D-canonical first, then MONDE-T by frequency),
+    The 20 D-canonical codes are ALWAYS fully included in both ``d_common`` and ``all`` (they are
+    exactly the ``d_only`` set). ``ncaa_top_x`` applies ONLY to the true non-canonical ncAA: the
+    MONDE-T ranking used for ``top_x``/``all`` EXCLUDES every canonical code (the 20 standard L
+    residues AND the D-canonicals, via ``canonical_exclusion_set``), so canonicals — which would
+    otherwise dominate the entity_count ranking (DTR=121, DAL=395, ...) — never consume the budget.
+
+    The result is de-duplicated, order-stable (D-canonical first, then true ncAA by frequency),
     and validated. CPU-only.
     """
     if ncaa_dict not in VALID_NCAA_DICT:
         raise ValueError(
             f"ncaa_dict must be one of {VALID_NCAA_DICT}, got {ncaa_dict!r}")
     codes: list[str] = list(D_CANONICAL)
+    exclude = canonical_exclusion_set()
     if ncaa_dict == "d_common":
-        codes += mondet.top_ncaa(ncaa_top_x, csv_path=csv_path)
+        codes += mondet.top_ncaa_excluding(ncaa_top_x, csv_path=csv_path, exclude=exclude)
     elif ncaa_dict == "all":
-        codes += [c for c, _p, _n in mondet.load_mondet(csv_path)]
+        codes += mondet.ncaa_codes(csv_path, exclude=exclude)
     palette = validate_palette(codes, csv_path=csv_path)
     if ncaa_dict == "all":
         # 'all' = NO cap (ncaa_top_x ignored); the whole MONDE-T tail is in play. Log the size
