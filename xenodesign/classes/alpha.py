@@ -13,10 +13,10 @@ wire the α loop without knowing the binder chemistry.
 Behaviour-preservation note (monkeypatch contract): several helpers read their
 collaborators (``_ligandmpnn_design_fn`` / ``carbonara_design_fn`` /
 ``_cterm_gly_anchor`` / ``_best_cif_path`` / ``make_alpha_seq_update_fn``) as
-module globals at CALL TIME. The legacy CPU tests monkeypatch those names on the
-``scripts.design_alpha`` module object. To keep those tests green byte-for-byte,
-the call-time lookups go through :func:`_shim` (the ``scripts.design_alpha``
-module), which re-exports these names — so a patch on either module is honoured.
+module globals at CALL TIME, so a test monkeypatching one of those names on THIS
+module is honoured. (MOD-2 removed the former ``_shim()`` indirection through the
+``scripts.design_alpha`` re-export module — the package no longer imports from
+``scripts``; tests patch the canonical names here directly.)
 """
 from __future__ import annotations
 
@@ -87,19 +87,18 @@ _ALPHA_WEIGHTS = {"chirality": 0.40, "binding": 0.40, "pll": 0.05, "mirror": 0.0
                   "ss_bias": 0.10}
 
 
-def _shim():
-    """Return the ``scripts.design_alpha`` module for monkeypatch-honouring lookups.
+def _self():
+    """Return THIS module object, for monkeypatch-honouring call-time attribute lookups.
 
-    The legacy CPU tests patch collaborator names (``_ligandmpnn_design_fn`` /
-    ``carbonara_design_fn`` / ``_cterm_gly_anchor`` / ``_best_cif_path`` /
-    ``make_alpha_seq_update_fn``) on the ``scripts.design_alpha`` module. That module
-    re-exports those names from THIS module, so by default the objects are identical;
-    when a test patches one of them on the shim, helpers that resolve it through
-    :func:`_shim` honour the patch (preserving the validated behaviour + test contract).
-    Imported lazily to avoid an import cycle (the shim imports from this module).
+    Helpers that read a collaborator at call time (``_ligandmpnn_design_fn`` /
+    ``carbonara_design_fn`` / ``_make_base_backend`` / ``_cterm_gly_anchor`` /
+    ``_best_cif_path`` / ``make_alpha_seq_update_fn``) go through this so a test patching
+    one of those names on the alpha module is honoured. (MOD-2: replaces the former
+    ``_shim()`` -> ``scripts.design_alpha`` indirection; the package no longer imports
+    from ``scripts``.)
     """
-    import scripts.design_alpha as _da
-    return _da
+    import sys
+    return sys.modules[__name__]
 
 
 # ── CIF → binder-chain sequence (TASK 1 off-by-one fix) ────────────────────────
@@ -335,8 +334,8 @@ class _MixedBackend:
     (ligandmpnn, carbonara, ligandmpnn, ...). ``backend_log`` records which base produced each call
     so the run can report the per-iter backend assignment.
 
-    The bases are looked up from the ``scripts.design_alpha`` shim at call time
-    (``_shim()._ligandmpnn_design_fn`` / ``_shim().carbonara_design_fn``) so monkeypatching either
+    The bases are looked up from THIS module at call time
+    (``_self()._ligandmpnn_design_fn`` / ``_self().carbonara_design_fn``) so monkeypatching either
     name on that module is honoured (the validated behaviour + legacy test contract). 6-positional-
     arg call signature -> itself an InverseFoldingBackend, wrappable by _cterm_gly_anchor /
     MultiCandidate.
@@ -353,7 +352,7 @@ class _MixedBackend:
         name = self._NAMES[self._i % len(self._NAMES)]
         self._i += 1
         self.backend_log.append(name)
-        shim = _shim()
+        shim = _self()
         base = shim._ligandmpnn_design_fn if name == "ligandmpnn" else shim.carbonara_design_fn
         return base(design_backbone, context_coords, context_elements,
                     fixed_mask, temperature, num_seqs)
@@ -367,12 +366,12 @@ def _make_base_backend(backend: str = "ligandmpnn"):
     interleave). Raises ValueError for an unknown mode (fail-fast). The selected backend's heavy
     deps are only touched when it is actually CALLED, so selection itself stays CPU-clean.
 
-    The pure bases are looked up from the ``scripts.design_alpha`` shim at call time so a test
+    The pure bases are looked up from THIS module at call time so a test
     monkeypatch of ``_ligandmpnn_design_fn`` / ``carbonara_design_fn`` on that module is honoured.
     """
     if backend == "mixed":
         return _MixedBackend()
-    shim = _shim()
+    shim = _self()
     try:
         return {"ligandmpnn": shim._ligandmpnn_design_fn,
                 "carbonara": shim.carbonara_design_fn}[backend]
@@ -405,15 +404,15 @@ def make_alpha_seq_update_fn(wrapper: _LoopBackendWrapper, num_seqs: int = _DEFA
     sequence-level key is the high-value/low-cost lever the feature-map ranked first.
 
     Monkeypatch contract: ``_make_base_backend`` / ``_cterm_gly_anchor`` / ``_best_cif_path`` are
-    resolved through the ``scripts.design_alpha`` shim at call time so the legacy CPU tests that
-    patch them on that module are honoured (validated behaviour preserved).
+    resolved through THIS module at call time so the legacy CPU tests that
+    patch them here are honoured (validated behaviour preserved).
     """
     from xenodesign.eval.gate_tier0a import backbone_by_residue_from_cif
     from xenodesign.inverse_folding import MultiCandidate
     from xenodesign.scorer import sequence_quality_key
     from xenodesign.sequence_update import SequenceUpdater, make_sequence_update_fn
 
-    shim = _shim()
+    shim = _self()
     # C-terminal Gly anchor (non-designable) wraps the SELECTED base backend so the helix CORE is
     # never overwritten by the tokenization Gly (correction; ADR-011 / FASTA audit). backend
     # defaults to 'ligandmpnn' => identical to the prior MultiCandidate(_cterm_gly_anchor(...)).
@@ -437,7 +436,7 @@ def make_alpha_seq_update_fn(wrapper: _LoopBackendWrapper, num_seqs: int = _DEFA
         out_dir = wrapper.last_out_dir
         if out_dir is None:
             raise RuntimeError("seq_update called before any structure step")
-        cif = _shim()._best_cif_path(out_dir)
+        cif = _self()._best_cif_path(out_dir)
         binder_res = (backbone_by_residue_from_cif(cif, binder_chain)
                       or backbone_by_residue_from_cif(cif, binder_chain.lower()))
         if not binder_res:
@@ -848,9 +847,8 @@ def run_alpha_design(
 
     Behaviour-preserving migration of the legacy ``scripts.design_alpha.run_alpha_design``:
     monkeypatch-sensitive collaborators (``make_alpha_seq_update_fn`` / ``_best_cif_path``) are
-    resolved through the ``scripts.design_alpha`` shim at call time so the legacy regression test
-    ``test_run_alpha_design_backend_string_not_shadowed_by_chai_object`` (which patches both on
-    that module) is honoured.
+    resolved through THIS module at call time so the legacy regression test
+    ``test_run_alpha_design_backend_string_not_shadowed_by_chai_object`` (which patches both here) is honoured.
     """
     import tempfile
     import time
@@ -868,7 +866,7 @@ def run_alpha_design(
 
     from xenodesign.backends.wrappers import _PredictBackendWrapper
 
-    shim = _shim()
+    shim = _self()
 
     from xenodesign.config import resolve_device
     device = device or resolve_device()  # None -> XENO_DEVICE / cuda:0 if avail / mps / cpu

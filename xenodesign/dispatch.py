@@ -150,7 +150,7 @@ def _run_beam(cls, cfg, loop, init, loop_dir, roles=None):  # pragma: no cover (
     from xenodesign.scorer import sequence_quality_key
     from xenodesign.sequence_update import _ligandmpnn_design_fn
 
-    from scripts.design_alpha import _cterm_gly_anchor, _ensure_cterm_glycine
+    from xenodesign.classes.alpha import _cterm_gly_anchor, _ensure_cterm_glycine
     from scripts.design_alpha_beam import (
         _make_anneal_referee_fn, _make_beam_referee_fn, _make_extract_fn,
     )

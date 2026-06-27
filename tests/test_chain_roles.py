@@ -90,7 +90,7 @@ def _run_extract(monkeypatch, roles, binder_len):
     # _best_cif_path is resolved through the design_alpha shim; stub it + the all-atom context.
     monkeypatch.setattr(alpha_mod, "_best_cif_path", lambda out_dir: "/fake/best.cif",
                         raising=False)
-    shim = alpha_mod._shim()
+    shim = alpha_mod   # MOD-2: _shim() removed; collaborators are patched on the alpha module directly
     monkeypatch.setattr(shim, "_best_cif_path", lambda out_dir: "/fake/best.cif")
     monkeypatch.setattr(alpha_mod, "_all_atoms_from_chain",
                         lambda cif, chain: (np.zeros((1, 3)), ["C"]))
@@ -150,7 +150,7 @@ def test_extract_default_roles_is_alpha_B(monkeypatch):
     # Witness keyed to alpha's hardcoded ('B' binder, 'A' context) default.
     fake_bb, seen = _make_chain_witness("B", 13, "A")
     monkeypatch.setattr("xenodesign.eval.gate_tier0a.backbone_by_residue_from_cif", fake_bb)
-    shim = alpha_mod._shim()
+    shim = alpha_mod   # MOD-2: _shim() removed; collaborators are patched on the alpha module directly
     monkeypatch.setattr(shim, "_best_cif_path", lambda out_dir: "/fake/best.cif")
     monkeypatch.setattr(alpha_mod, "_all_atoms_from_chain",
                         lambda cif, chain: (np.zeros((1, 3)), ["C"]))

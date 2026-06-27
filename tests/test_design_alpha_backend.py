@@ -15,7 +15,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-import scripts.design_alpha as _da
+import scripts.design_alpha as _da  # noqa: F401  (CLI surface still tested via _da._parse_args)
+import xenodesign.classes.alpha as alpha_mod
 from scripts.design_alpha import (
     _make_base_backend,
     make_alpha_seq_update_fn,
@@ -66,8 +67,8 @@ def test_mixed_alternates_across_successive_calls(monkeypatch):
         calls.append("carbonara")
         return ["C" * len(fm) for _ in range(n)]
 
-    monkeypatch.setattr(_da, "_ligandmpnn_design_fn", fake_lmpnn, raising=False)
-    monkeypatch.setattr(_da, "carbonara_design_fn", fake_carb, raising=False)
+    monkeypatch.setattr(alpha_mod, "_ligandmpnn_design_fn", fake_lmpnn, raising=False)
+    monkeypatch.setattr(alpha_mod, "carbonara_design_fn", fake_carb, raising=False)
 
     mixed = _make_base_backend("mixed")
     fm = [False] * 4
@@ -86,8 +87,8 @@ def test_mixed_records_backend_used_per_call(monkeypatch):
     def fake_carb(db, cc, ce, fm, temp, n):
         return ["C" * len(fm) for _ in range(n)]
 
-    monkeypatch.setattr(_da, "_ligandmpnn_design_fn", fake_lmpnn, raising=False)
-    monkeypatch.setattr(_da, "carbonara_design_fn", fake_carb, raising=False)
+    monkeypatch.setattr(alpha_mod, "_ligandmpnn_design_fn", fake_lmpnn, raising=False)
+    monkeypatch.setattr(alpha_mod, "carbonara_design_fn", fake_carb, raising=False)
 
     mixed = _make_base_backend("mixed")
     fm = [False] * 3
@@ -107,8 +108,8 @@ def test_mixed_returns_n_candidates_unchanged(monkeypatch):
     def fake_carb(db, cc, ce, fm, temp, n):
         return ["C" * len(fm) for _ in range(n)]
 
-    monkeypatch.setattr(_da, "_ligandmpnn_design_fn", fake_lmpnn, raising=False)
-    monkeypatch.setattr(_da, "carbonara_design_fn", fake_carb, raising=False)
+    monkeypatch.setattr(alpha_mod, "_ligandmpnn_design_fn", fake_lmpnn, raising=False)
+    monkeypatch.setattr(alpha_mod, "carbonara_design_fn", fake_carb, raising=False)
 
     mixed = _make_base_backend("mixed")
     out = mixed(np.zeros((4, 4, 3)), np.zeros((0, 3)), [], [False] * 4, 0.1, 3)
@@ -158,7 +159,7 @@ def test_make_alpha_seq_update_fn_carbonara_uses_carbonara_base(monkeypatch):
         seen["base"] = base
         return base
 
-    monkeypatch.setattr(_da, "_cterm_gly_anchor", fake_anchor)
+    monkeypatch.setattr(alpha_mod, "_cterm_gly_anchor", fake_anchor)
     from xenodesign.carbonara_backend import carbonara_design_fn
 
     make_alpha_seq_update_fn(_FakeWrapper(), num_seqs=2, backend="carbonara")
@@ -172,7 +173,7 @@ def test_make_alpha_seq_update_fn_ligandmpnn_uses_ligandmpnn_base(monkeypatch):
         seen["base"] = base
         return base
 
-    monkeypatch.setattr(_da, "_cterm_gly_anchor", fake_anchor)
+    monkeypatch.setattr(alpha_mod, "_cterm_gly_anchor", fake_anchor)
     from xenodesign.sequence_update import _ligandmpnn_design_fn
 
     make_alpha_seq_update_fn(_FakeWrapper(), num_seqs=2)  # default
@@ -244,12 +245,13 @@ def test_run_alpha_design_backend_string_not_shadowed_by_chai_object(monkeypatch
 
     monkeypatch.setattr(
         "xenodesign.backends.chai_backend.ChaiBackend", _FakeChaiBackend, raising=True)
-    monkeypatch.setattr(_da, "_best_cif_path", lambda d: tmp_path / "x.cif")
+    monkeypatch.setattr(alpha_mod, "_best_cif_path", lambda d: tmp_path / "x.cif")
     monkeypatch.setattr(
         "xenodesign.seed.reflect_binder_in_complex_from_cif",
         lambda *a, **k: np.zeros((3, 3)))
-    monkeypatch.setattr("scripts.design_demo._PredictBackendWrapper", _FakePredictWrapper)
-    monkeypatch.setattr(_da, "make_alpha_seq_update_fn", spy_make_alpha_seq_update_fn)
+    monkeypatch.setattr("xenodesign.backends.wrappers._PredictBackendWrapper",
+                        _FakePredictWrapper)
+    monkeypatch.setattr(alpha_mod, "make_alpha_seq_update_fn", spy_make_alpha_seq_update_fn)
 
     with pytest.raises(_Sentinel):
         _da.run_alpha_design(
