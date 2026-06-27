@@ -59,3 +59,6 @@ docs/chai1-mechanism-and-xenodesign-plan.md
 
 # Claude Code internal config + session handoffs (not part of the public tool)
 .claude/
+
+# Throwaway golden written by the self-test helper (always regenerated; never commit)
+tests/golden/_helper_selftest.json
