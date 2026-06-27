@@ -10,11 +10,14 @@ helpers themselves are pure and flag-agnostic so they are independently unit-tes
 """
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from pathlib import Path
 
 from xenodesign.seq_stage import FrozenPosition
+
+logger = logging.getLogger(__name__)
 
 
 def frozen_from_coord_residues(coord_residues) -> set:
@@ -133,7 +136,9 @@ def make_helix_panel_for_gates(last_out_dir_fn, roles=None):
             from xenodesign.classes._alpha_internals import _binder_helix_fraction
             cif = _best_cif_path(last_out_dir_fn())
             helix = _binder_helix_fraction(cif, chain=binder_chain)
-        except Exception:
+        except Exception as _exc:
+            logger.debug("make_helix_panel_for_gates: helix read failed — degrading to None "
+                         "(gate will accept); reason: %s: %s", type(_exc).__name__, _exc)
             helix = None  # never crash a trajectory — gate will accept on None
         return RefereeScore(chirality_violation=0.0, iptm=0.0, helix_fraction=helix)
 
