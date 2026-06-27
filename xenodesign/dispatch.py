@@ -316,10 +316,29 @@ def _run_abc(cfg: DesignConfig, backend, seed_one_letter: str, out_dir: "Path",
     coord_params = (cfg.restraint.params.get("coord_residues") if cfg.restraint else None) or []
     frozen = {int(t[0]) - 1 for t in coord_params}
 
+    import os
+    _routed = os.environ.get("XENO_SEQ_STAGE", "0") != "0"
+    _coord_rows = None
+    frozen_fp = None
+    if _routed:
+        # S3a.1: identity+chirality FrozenPosition (the §3.3 metal producer), replacing S2's
+        # position-only frozen so the donor His identity + L/D handedness survive into ABC's
+        # known_seq/encode/anchor.
+        from xenodesign.run_stages import build_run_restraints, frozen_from_coord_residues
+        frozen_fp = frozen_from_coord_residues(coord_params)
+        # engine still wants 0-based ints — keep the int set for abc_search's freeze logic
+        # S3a.2: coordination + closure rows (the rows ABC currently emits NONE of). Built once,
+        # passed into the fitness so every eval predicts under the coordination restraint.
+        _rpath = build_run_restraints(cfg, out_dir=out_dir / "abc_restraints", roles=roles)
+        if _rpath is not None:
+            # Re-read the rows as raw CSV lines (the fitness re-writes them per eval dir).
+            _coord_rows = [l for l in _rpath.read_text().splitlines()[1:] if l.strip()]
+
     fitness_fn = make_abc_fitness(
         backend, k_star=knobs.fitness_steps,
         w_ptm=knobs.w_ptm, w_termini=knobs.w_termini, closure=True,
         out_root=out_dir / "abc_evals",
+        coord_restraint_rows=_coord_rows,
     )
 
     if active_variant == "b":
@@ -332,7 +351,9 @@ def _run_abc(cfg: DesignConfig, backend, seed_one_letter: str, out_dir: "Path",
     else:
         # Variant A: the coordinate-only LigandMPNN adapter (default SequenceUpdater backend).
         from xenodesign.sequence_update import _ligandmpnn_design_fn
-        design_fn = abc_variant_a_design_fn(_ligandmpnn_design_fn, roles=roles, frozen=frozen)
+        design_fn = abc_variant_a_design_fn(
+            _ligandmpnn_design_fn, roles=roles,
+            frozen=(frozen_fp if _routed else frozen))
 
     n = len(seed_one_letter)
     init_pattern = seed_chirality_pattern(n, rng=rng)
@@ -346,22 +367,40 @@ def _run_abc(cfg: DesignConfig, backend, seed_one_letter: str, out_dir: "Path",
         frozen=frozen or None, rng=rng,
     )
 
-    result = {
-        "case_id": "cyclic",
-        "search": "abc",
-        "abc_variant": active_variant,
-        "fitness_steps": knobs.fitness_steps,
-        "selected_nectar": (float(best.nectar) if best is not None and best.nectar is not None
-                            else None),
-        "selected_d_fasta": (best.identity if best is not None else None),
-        "selected_chirality_pattern": (dict(best.chirality_pattern) if best is not None else None),
-        "n_cycles": len(history),
-        "history": history,  # per-cycle [{"cycle","best_nectar","evals_used"}] — convergence curve
-        "out_dir": str(out_dir),
-    }
-    import json
-    (out_dir / "abc_result.json").write_text(json.dumps(result, indent=2, default=str))
-    return result
+    # S3a.5: UNIFIED result-assembly — when the flag is ON AND there are actual coordination rows
+    # (metal + coord_residues), wrap the best FoodSource into a one-step LoopStep trajectory and
+    # return it for the SAME run_design referee -> JudgePanel -> cls.report tail (ONE JudgePanel
+    # for all strategies; ABC stops building its own dict). The metal/pLM gates apply at panel-veto
+    # time (ABC has no per-iteration accept loop). Returned to run_design as `history`.
+    # When _routed but no coord rows (no-target abc_a/abc_b), keep the bespoke dict so the S2
+    # goldens remain byte-identical (they run flag-ON; the panel routing is METAL-SPECIFIC).
+    _do_panel_assembly = _routed and frozen_fp  # non-empty FrozenPositions → metal coord case
+    if not _do_panel_assembly:
+        result = {
+            "case_id": "cyclic",
+            "search": "abc",
+            "abc_variant": active_variant,
+            "fitness_steps": knobs.fitness_steps,
+            "selected_nectar": (float(best.nectar) if best is not None and best.nectar is not None
+                                else None),
+            "selected_d_fasta": (best.identity if best is not None else None),
+            "selected_chirality_pattern": (dict(best.chirality_pattern) if best is not None else None),
+            "n_cycles": len(history),
+            "history": history,  # per-cycle [{"cycle","best_nectar","evals_used"}]
+            "out_dir": str(out_dir),
+        }
+        import json
+        (out_dir / "abc_result.json").write_text(json.dumps(result, indent=2, default=str))
+        return result
+
+    from xenodesign.loop import LoopState, LoopStep
+    best_d_fasta = best.identity if best is not None else ""
+    best_pred = type("_AbcPred", (), {"iptm": float(best.nectar or 0.0),
+                                      "ptm": float(best.nectar or 0.0),
+                                      "_cif_path": getattr(best, "last_structure", None)})()
+    step = LoopStep(state=LoopState(d_fasta=best_d_fasta, coords=None),
+                    prediction=best_pred, score=float(best.nectar or 0.0))
+    return [step]
 
 
 def run_design(cfg: DesignConfig) -> dict:
@@ -417,85 +456,100 @@ def run_design(cfg: DesignConfig) -> dict:
     # abc_search with the fast pTM+termini fitness + the flag-selected variant (A->a / B->b,
     # superseding cfg.abc.variant), for ANY binder/target. mixed_chirality=none falls through to
     # the greedy/beam HalluLoop below. ``loop.py`` is never touched.
+    # S3a.5: ABC (mixed_chirality) path sets `history` from the routed list[LoopStep]; greedy/beam
+    # sets it below. Defaults for variables the panel tail needs regardless of path.
+    l_seed_iptm = 0.0
+    loop_dir = out_dir          # Cyclic.referee ignores loop_dir; safe default for ABC path
+
     if _is_mixed_chirality(cfg):
         variant = "b" if cfg.mixed_chirality == "B" else "a"
-        return _run_abc(cfg, adapter, seed_spec.one_letter, out_dir, variant=variant, roles=roles)
-
-    # Restraint emission (class-specific; consulted only when restraints are on).
-    constraint_path = (cls.restraints(cfg, case, out_dir, (entities, msa_dir))
-                       if cfg.restraints_on else None)
-
-    # ── L-seed predict (real l_seed_iptm) + double-flip → D-correct seed coords ──
-    # Mirrors run_alpha_design's [2/4] step. The binder is appended LAST so multi-chain / ligand
-    # targets order correctly; its chain letter is chr('A'+len(entities)) (B for α single-target,
-    # C for the 2-chain HA target). MSA is forwarded so an MSA'd target seeds faithfully. CIF
-    # reflection is GPU/IO; on any failure (e.g. the mocked predictor) fall back to coords=None.
-    binder_chain = roles.binder  # from the ONE chain contract — not a re-derived chr(...)
-    l_seed_dir = out_dir / "p0_l_seed"
-    l_seed_pred = predict_fn(
-        [*entities,
-         {"type": "protein", "name": "binder",
-          "sequence": seed_spec.one_letter, "chirality": "L"}],
-        l_seed_dir, num_diffn_timesteps=200, constraint_path=constraint_path,
-        msa_directory=msa_dir)
-    l_seed_iptm = float(getattr(l_seed_pred, "iptm", 0.0))
-    try:
-        d_seed_coords = reflect_binder_in_complex_from_cif(
-            _best_cif_path(l_seed_dir), binder_chain=binder_chain, axis=0)
-    except Exception:
-        d_seed_coords = None
-
-    # ── Wrapper: restrained → PREDICT-mode (constraints honoured); else truncated-refine ──
-    if constraint_path is not None:
-        wrapper = _PredictBackendWrapper(adapter, entities,
-                                         constraint_path=constraint_path,
-                                         msa_directory=msa_dir)
-        refine_fn = wrapper
+        abc_out = _run_abc(cfg, adapter, seed_spec.one_letter, out_dir, variant=variant, roles=roles)
+        if isinstance(abc_out, list):
+            # S3a.5: routed metal+coord ABC yielded a list[LoopStep] -> fall through to the SHARED
+            # referee -> JudgePanel -> cls.report tail below (one assembly for all strategies).
+            history = abc_out
+        else:
+            return abc_out          # bespoke dict (flag-OFF or no-coord flag-ON)
     else:
-        wrapper = _LoopBackendWrapper(adapter, entities, msa_directory=msa_dir)
-        refine_fn = None
+        history = None              # set by the greedy/beam branch below
 
-    loop = HalluLoop(
-        backend=wrapper,
-        sequence_update_fn=_seed_to_seq_update(cls, cfg, wrapper, seed_spec, roles=roles),
-        score_fn=cls.objective(cfg, wrapper),
-        refine_fn=refine_fn,
-    )
-    # SEED chirality survival (iter_000): a plain `to_d_fasta` makes the WHOLE seed all-D, which
-    # would flip any DECLARED L coordinator (e.g. cyclic His6/His18) to D on the very first
-    # iteration — the same all-D regression the seq-update fix closes for iters >=1. When the
-    # seed carries a mixed L/D `fixed_chirality` (any position pinned 'L'), encode per-position
-    # via `mixed_chirality_fasta` so L coordinators stay bare canonical and D positions become
-    # D-CCD. Pure all-D seeds (no 'L' pinned — the alpha/non_alpha default) keep `to_d_fasta`
-    # byte-for-byte.
-    init = LoopState(d_fasta=_seed_d_fasta(seed_spec), coords=d_seed_coords)
-    loop_dir = out_dir / "loop"
+    if history is None:
+        # Restraint emission (class-specific; consulted only when restraints are on).
+        constraint_path = (cls.restraints(cfg, case, out_dir, (entities, msa_dir))
+                           if cfg.restraints_on else None)
 
-    # S3a.3d: uniform gates — when XENO_SEQ_STAGE is on, compose the class gate WITH the metal /
-    # non_alpha / periodicity gates so EVERY greedy strategy is gated identically (spec §3 spine).
-    # Inject the REAL JudgePanel (helix score_fn reads from the wrapper's per-step CIF via
-    # make_helix_panel_for_gates) and the REAL last_out_dir_fn (wrapper.last_out_dir, same source
-    # the seq-update path uses) so both alpha_demote AND metalhawk gates actually bite.
-    # Flag off keeps cls.accept_fns(cfg) byte-identical (no behavior change when XENO_SEQ_STAGE=0).
-    # NOTE: beam composes its own gates inside _run_beam; threading accept_fn into beam is S4
-    # alongside the #17 wrapper fix — for S3a.3d the beam path keeps its current gate wiring.
-    import os
-    if os.environ.get("XENO_SEQ_STAGE", "0") != "0":
-        from xenodesign.run_stages import build_run_gates, make_helix_panel_for_gates
-        _last_out_dir_fn = lambda: wrapper.last_out_dir
-        _helix_panel = make_helix_panel_for_gates(_last_out_dir_fn, roles=roles)
-        accept_fn = build_run_gates(cfg, roles=roles,
-                                    panel=_helix_panel,
-                                    last_out_dir_fn=_last_out_dir_fn)
-    else:
-        accept_fn = cls.accept_fns(cfg)
+        # ── L-seed predict (real l_seed_iptm) + double-flip → D-correct seed coords ──
+        # Mirrors run_alpha_design's [2/4] step. The binder is appended LAST so multi-chain / ligand
+        # targets order correctly; its chain letter is chr('A'+len(entities)) (B for α single-target,
+        # C for the 2-chain HA target). MSA is forwarded so an MSA'd target seeds faithfully. CIF
+        # reflection is GPU/IO; on any failure (e.g. the mocked predictor) fall back to coords=None.
+        binder_chain = roles.binder  # from the ONE chain contract — not a re-derived chr(...)
+        l_seed_dir = out_dir / "p0_l_seed"
+        l_seed_pred = predict_fn(
+            [*entities,
+             {"type": "protein", "name": "binder",
+              "sequence": seed_spec.one_letter, "chirality": "L"}],
+            l_seed_dir, num_diffn_timesteps=200, constraint_path=constraint_path,
+            msa_directory=msa_dir)
+        l_seed_iptm = float(getattr(l_seed_pred, "iptm", 0.0))
+        try:
+            d_seed_coords = reflect_binder_in_complex_from_cif(
+                _best_cif_path(l_seed_dir), binder_chain=binder_chain, axis=0)
+        except Exception:
+            d_seed_coords = None
 
-    if cfg.loop.search == "beam":
-        history = _run_beam(cls, cfg, loop, init, loop_dir, roles=roles)
-    else:
-        history = loop.run(init=init, iterations=cfg.loop.iters,
-                           ref_time_steps=cfg.loop.ref_time_steps, out_dir=loop_dir,
-                           accept_fn=accept_fn)
+        # ── Wrapper: restrained → PREDICT-mode (constraints honoured); else truncated-refine ──
+        if constraint_path is not None:
+            wrapper = _PredictBackendWrapper(adapter, entities,
+                                             constraint_path=constraint_path,
+                                             msa_directory=msa_dir)
+            refine_fn = wrapper
+        else:
+            wrapper = _LoopBackendWrapper(adapter, entities, msa_directory=msa_dir)
+            refine_fn = None
+
+        loop = HalluLoop(
+            backend=wrapper,
+            sequence_update_fn=_seed_to_seq_update(cls, cfg, wrapper, seed_spec, roles=roles),
+            score_fn=cls.objective(cfg, wrapper),
+            refine_fn=refine_fn,
+        )
+        # SEED chirality survival (iter_000): a plain `to_d_fasta` makes the WHOLE seed all-D,
+        # which would flip any DECLARED L coordinator (e.g. cyclic His6/His18) to D on the very
+        # first iteration — the same all-D regression the seq-update fix closes for iters >=1.
+        # When the seed carries a mixed L/D `fixed_chirality` (any position pinned 'L'), encode
+        # per-position via `mixed_chirality_fasta` so L coordinators stay bare canonical and D
+        # positions become D-CCD. Pure all-D seeds (no 'L' pinned — the alpha/non_alpha default)
+        # keep `to_d_fasta` byte-for-byte.
+        init = LoopState(d_fasta=_seed_d_fasta(seed_spec), coords=d_seed_coords)
+        loop_dir = out_dir / "loop"
+
+        # S3a.3d: uniform gates — when XENO_SEQ_STAGE is on, compose the class gate WITH the
+        # metal / non_alpha / periodicity gates so EVERY greedy strategy is gated identically
+        # (spec §3 spine). Inject the REAL JudgePanel (helix score_fn reads from the wrapper's
+        # per-step CIF via make_helix_panel_for_gates) and the REAL last_out_dir_fn
+        # (wrapper.last_out_dir, same source the seq-update path uses) so both alpha_demote AND
+        # metalhawk gates actually bite. Flag off keeps cls.accept_fns(cfg) byte-identical (no
+        # behavior change when XENO_SEQ_STAGE=0).
+        # NOTE: beam composes its own gates inside _run_beam; threading accept_fn into beam is S4
+        # alongside the #17 wrapper fix — for S3a.3d the beam path keeps its current gate wiring.
+        import os
+        if os.environ.get("XENO_SEQ_STAGE", "0") != "0":
+            from xenodesign.run_stages import build_run_gates, make_helix_panel_for_gates
+            _last_out_dir_fn = lambda: wrapper.last_out_dir
+            _helix_panel = make_helix_panel_for_gates(_last_out_dir_fn, roles=roles)
+            accept_fn = build_run_gates(cfg, roles=roles,
+                                        panel=_helix_panel,
+                                        last_out_dir_fn=_last_out_dir_fn)
+        else:
+            accept_fn = cls.accept_fns(cfg)
+
+        if cfg.loop.search == "beam":
+            history = _run_beam(cls, cfg, loop, init, loop_dir, roles=roles)
+        else:
+            history = loop.run(init=init, iterations=cfg.loop.iters,
+                               ref_time_steps=cfg.loop.ref_time_steps, out_dir=loop_dir,
+                               accept_fn=accept_fn)
 
     # ── Referee + adversarial panel selection ──────────────────────────────────
     # Classes whose referee returns None per step (e.g. the cyclic recall case) get a neutral
