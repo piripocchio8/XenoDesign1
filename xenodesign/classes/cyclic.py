@@ -113,7 +113,10 @@ class Cyclic:
 
         length = resolve_binder_length(cfg)
         gen = make_configured_generator(cfg)
-        fixed = self._his_positions(cfg, length) if cfg.restraints_on else None
+        # SEED placement is opt-in by SOURCE, not by the restraints toggle: EXPLICIT --coord_residues
+        # always seed (so an UNGUIDED --no_restraints metal run still places the declared donors);
+        # the case-His DEFAULT scaffold is pinned only when restraints are ON (a guided run).
+        fixed = self._his_positions(cfg, length, allow_case_default=cfg.restraints_on)
         result = unified_seed(gen, target_seq="", length=length, reverse=False,
                               fixed_positions=fixed, fixed_residue="H")
         one = self._place_declared_residues(cfg, result.one_letter, length)
@@ -254,20 +257,24 @@ class Cyclic:
         params = cfg.restraint.params if cfg.restraint else {}
         return list(params.get("coord_residues") or [])
 
-    def _his_positions(self, cfg, length) -> dict:
+    def _his_positions(self, cfg, length, *, allow_case_default: bool = True) -> dict:
         """OPT-IN coordinating positions+chirality for the from-scratch cyclic seed.
 
         DECLARATIVE override (``--coord_residues``): when ``cfg.restraint.params['coord_residues']``
         is set, those (pos, chirality) pairs ARE the fixed positions (generalizing beyond His/Zn —
-        any donor, any chirality). Absent -> the case's ``metal_coordination`` ``his_resnums`` +
-        ``CYCLIC_HIS_CHIRALITY`` defaults. Positions outside the from-scratch ``length`` are
-        dropped. Returns {} when neither source applies. NEVER mandatory: only consulted when
-        restraints are ON."""
+        any donor, any chirality) — and they seed REGARDLESS of the restraints toggle (an UNGUIDED
+        ``--no_restraints`` metal run still places the explicitly declared donors). Absent AND
+        ``allow_case_default`` -> the case's ``metal_coordination`` ``his_resnums`` +
+        ``CYCLIC_HIS_CHIRALITY`` defaults (a GUIDED run, restraints ON). When ``allow_case_default``
+        is False (restraints OFF) no default His scaffold is pinned — fully unguided. Positions
+        outside the from-scratch ``length`` are dropped. Returns {} when neither source applies."""
         coords = self._coord_residues(cfg)
         if coords:
             # Tuple is (pos, one_letter, three_letter, chirality[, atom]); index for back-compat.
             return {int(t[0]): t[3]
                     for t in coords if 1 <= int(t[0]) <= length}
+        if not allow_case_default:
+            return {}
         case = get_case("cyclic")
         spec = case.restraint
         if spec is None or spec.kind != "metal_coordination":
@@ -286,7 +293,8 @@ class Cyclic:
 
         length = resolve_binder_length(cfg)
         gen = make_configured_generator(cfg)
-        fixed = self._his_positions(cfg, length) if cfg.restraints_on else None
+        # Mirror seed(): explicit coords always seed; the case-His default only when restraints ON.
+        fixed = self._his_positions(cfg, length, allow_case_default=cfg.restraints_on)
         result = unified_seed(gen, target_seq="", length=length, reverse=False,
                               fixed_positions=fixed, fixed_residue="H")
         one = self._place_declared_residues(cfg, result.one_letter, length)
@@ -301,11 +309,10 @@ class Cyclic:
 
         ``unified_seed`` places a single ``fixed_residue`` ('H') at the fixed positions; the
         declarative ``--coord_residues`` flag generalizes that to ANY donor (His 'H', Cys 'C',
-        Asp 'D', ...), so when coordinators are declared (and restraints ON) we overwrite each
-        declared position with its real one-letter code. No-op when the flag is absent (the
-        'H' His default already placed by unified_seed stands)."""
-        if not cfg.restraints_on:
-            return one_letter
+        Asp 'D', ...), so whenever coordinators are declared we overwrite each declared position
+        with its real one-letter code — REGARDLESS of the restraints toggle, so an UNGUIDED
+        ``--no_restraints`` metal run still seeds the declared donors. No-op when the flag is
+        absent (the 'H' His default — if any — already placed by unified_seed stands)."""
         chars = list(one_letter)
         for t in self._coord_residues(cfg):
             # Tuple is (pos, one_letter, three_letter, chirality[, atom]); index for back-compat.
