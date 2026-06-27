@@ -195,3 +195,10 @@ def test_ncaa_move_can_revert_an_ncaa_back_to_canonical():
 def test_identity_tokens_roundtrip():
     from xenodesign.abc.moves import identity_tokens
     assert identity_tokens("A(AIB)C") == ["A", "(AIB)", "C"]
+
+
+def test_ncaa_positions_reports_0based_block_indices():
+    from xenodesign.abc.moves import ncaa_positions
+    # 0-based positions of the (XXX) blocks (the positions MPNN must keep fixed).
+    assert ncaa_positions("A(AIB)C(NLE)") == {1, 3}
+    assert ncaa_positions("ACDEF") == set()

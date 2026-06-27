@@ -149,6 +149,15 @@ def identity_tokens(identity: str) -> list[str]:
     return out
 
 
+def ncaa_positions(identity: str) -> set:
+    """0-based positions of the ncAA ``(XXX)`` blocks in a Variant-B identity.
+
+    These are the positions MPNN must keep FIXED (MPNN cannot emit ncAA): the caller unions
+    this into ``SequenceUpdater(frozen_positions=...)`` (the same seam as declared coordinators)
+    so an ABC-chosen ncAA is never overwritten by an inverse-folding re-design."""
+    return {i for i, tok in enumerate(identity_tokens(identity)) if tok.startswith("(")}
+
+
 def ncaa_identity_move(
     identity: str,
     rng: random.Random,

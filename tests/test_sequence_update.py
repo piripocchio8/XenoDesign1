@@ -44,6 +44,33 @@ def test_update_passes_designable_mask_to_design_fn():
     assert captured["mask"] == [False, True, False]
 
 
+def test_ncaa_positions_are_fixed_in_mpnn_mask():
+    # track #2: ncAA positions chosen by ABC are passed as frozen_positions and MUST be fixed
+    # in the MPNN mask (MPNN cannot emit ncAA), reusing the coordinator frozen_positions seam.
+    from xenodesign.abc.moves import ncaa_positions
+
+    captured = {}
+
+    def capture_fn(design_backbone, context_coords, context_elements, fixed_mask):
+        captured["mask"] = list(fixed_mask)
+        return "A" * design_backbone.shape[0]
+
+    identity = "A(AIB)C"   # one ncAA block at 0-based position 1
+    frozen = ncaa_positions(identity)
+    assert frozen == {1}
+
+    design_bb = np.random.RandomState(9).rand(3, 4, 3)
+    upd = SequenceUpdater(design_fn=capture_fn, frozen_positions=frozen)
+    upd.update(
+        design_backbone=design_bb,
+        design_codes=["DAL", "DSN", "DLE"],   # all designable on their own
+        context_coords=np.zeros((0, 3)),
+        context_elements=[],
+    )
+    # The ncAA position is fixed despite being designable; the rest stay designable.
+    assert captured["mask"] == [False, True, False]
+
+
 def test_update_raises_if_no_designable_positions():
     design_bb = np.random.RandomState(2).rand(2, 4, 3)
     upd = SequenceUpdater(design_fn=_fake_design_fn)
