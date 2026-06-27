@@ -86,6 +86,20 @@ def test_mixed_chirality_fasta_glycine_stays_bare():
     assert out == "GHG"
 
 
+def test_mixed_chirality_fasta_passes_ncaa_blocks_through():
+    # track #2: a Variant-B identity may already carry an ncAA as a (XXX) block; it must be
+    # emitted verbatim (chai's modified-residue contract), not looked up as a 1-letter code.
+    out = mixed_chirality_fasta("A(AIB)C", {1: "L", 3: "L"})
+    assert out == "A(AIB)C"
+
+
+def test_mixed_chirality_fasta_ncaa_block_unaffected_by_chirality_marks():
+    # An ncAA block is one position; a D mark on a neighbouring canonical still applies, but the
+    # (XXX) block itself is passed through unchanged (D-ncAA, if any, is already encoded in it).
+    out = mixed_chirality_fasta("(NLE)H", {1: "L", 2: "D"})
+    assert out == "(NLE)(DHI)"
+
+
 # ── Zn-ligand FASTA emission (the metal/HETATM context) ─────────────────────────
 
 def test_build_cyclic_input_fasta_has_protein_and_zn_ligand():

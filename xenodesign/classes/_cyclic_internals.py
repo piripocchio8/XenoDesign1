@@ -106,19 +106,27 @@ def mixed_chirality_fasta(seq_one_letter: str, fixed_chirality: dict) -> str:
     Raises:
         KeyError on an unknown amino-acid letter (with its 1-based position).
     """
+    # Tokenize per-residue so a Variant-B identity carrying ncAA / D-CCD ``(XXX)`` blocks
+    # (track #2) keeps position indices aligned with ``fixed_chirality`` and passes those
+    # already-encoded blocks through verbatim (chai's modified-residue contract).
+    from xenodesign.abc.moves import identity_tokens
+
     out: list[str] = []
-    for i, aa in enumerate(seq_one_letter):
+    for i, tok in enumerate(identity_tokens(seq_one_letter)):
+        if tok.startswith("("):
+            out.append(tok)  # pre-encoded ncAA / D-CCD block — emit verbatim
+            continue
         try:
-            three = AA1_TO_AA3[aa]
+            three = AA1_TO_AA3[tok]
         except KeyError:
-            raise KeyError(f"unknown amino-acid letter {aa!r} at position {i + 1}") from None
+            raise KeyError(f"unknown amino-acid letter {tok!r} at position {i + 1}") from None
         if three == "GLY":
             out.append("G")  # achiral — no D form
             continue
         if fixed_chirality.get(i + 1) == "D":
             out.append(f"({L_TO_D[three]})")  # D-CCD parenthesized block
         else:
-            out.append(aa)  # bare canonical L residue
+            out.append(tok)  # bare canonical L residue
     return "".join(out)
 
 
