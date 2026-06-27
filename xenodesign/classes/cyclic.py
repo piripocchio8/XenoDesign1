@@ -822,8 +822,9 @@ class Cyclic:
         restraints are ON."""
         coords = self._coord_residues(cfg)
         if coords:
-            return {int(pos): chirality
-                    for (pos, _ol, _tl, chirality) in coords if 1 <= int(pos) <= length}
+            # Tuple is (pos, one_letter, three_letter, chirality[, atom]); index for back-compat.
+            return {int(t[0]): t[3]
+                    for t in coords if 1 <= int(t[0]) <= length}
         case = get_case("cyclic")
         spec = case.restraint
         if spec is None or spec.kind != "metal_coordination":
@@ -863,9 +864,11 @@ class Cyclic:
         if not cfg.restraints_on:
             return one_letter
         chars = list(one_letter)
-        for (pos, ol, _tl, _chir) in self._coord_residues(cfg):
-            if 1 <= int(pos) <= length:
-                chars[int(pos) - 1] = ol
+        for t in self._coord_residues(cfg):
+            # Tuple is (pos, one_letter, three_letter, chirality[, atom]); index for back-compat.
+            pos, ol = int(t[0]), t[1]
+            if 1 <= pos <= length:
+                chars[pos - 1] = ol
         return "".join(chars)
 
     @staticmethod

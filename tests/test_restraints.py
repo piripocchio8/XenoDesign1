@@ -114,6 +114,53 @@ def test_metal_coordination_one_row_per_his():
     assert rows[3] == 'A,H11,B,X1,contact,0.8,0.0,2.6,His-Zn,zn_coord_11'
 
 
+def test_metal_coordination_emits_covalent_when_atoms_present():
+    # Coordinators carrying liganding atoms -> BOTH a residue-level CONTACT row AND an
+    # atom-level COVALENT row per coordinator (atom-specific metal coordination).
+    rows = metal_coordination_rows({
+        'metal_chain': 'B', 'metal_resnum': 1, 'metal_atom': 'ZN',
+        'coord_chain': 'A',
+        'coord_residues': [(6, 'H', 'HIS', 'L', 'ND1'), (12, 'H', 'DHI', 'D', 'ND1')],
+        'max_distance': 2.6, 'confidence': 0.8,
+    })
+    contacts = [r for r in rows if ',contact,' in r]
+    covalents = [r for r in rows if ',covalent,' in r]
+    assert len(contacts) == 2 and len(covalents) == 2
+    # residue-level contact (robust distance bias) unchanged: 'H6'/'X1'.
+    assert contacts[0].split(',')[1] == 'H6' and contacts[0].split(',')[3] == 'X1'
+    # atom-level covalent: binder 'H6@ND1' <-> metal 'X1@ZN'.
+    c0 = covalents[0].split(',')
+    assert c0[0] == 'A' and c0[1] == 'H6@ND1'
+    assert c0[2] == 'B' and c0[3] == 'X1@ZN'
+    assert c0[4] == 'covalent'
+    # D coordinator also produces a covalent row (DHI12, atom ND1).
+    c1 = covalents[1].split(',')
+    assert c1[1] == 'H12@ND1' and c1[3] == 'X1@ZN'
+
+
+def test_metal_coordination_no_atoms_is_pure_contact_backcompat():
+    # No atoms on coordinators -> only contact rows (existing behavior, unchanged).
+    rows = metal_coordination_rows({
+        'metal_chain': 'B', 'metal_resnum': 1,
+        'coord_chain': 'A',
+        'coord_residues': [(6, 'H'), (12, 'H')],
+        'max_distance': 2.6, 'confidence': 0.8,
+    })
+    assert all(',contact,' in r for r in rows)
+    assert not any(',covalent,' in r for r in rows)
+    assert len(rows) == 2
+
+
+def test_metal_coordination_his_resnums_still_pure_contact():
+    # Legacy His-only path (his_resnums) carries no atoms -> pure contact, no covalent.
+    rows = metal_coordination_rows({
+        'metal_chain': 'B', 'metal_resnum': 1,
+        'his_chain': 'A', 'his_resnums': (3, 6),
+        'max_distance': 2.6, 'confidence': 0.8,
+    })
+    assert all(',contact,' in r for r in rows) and len(rows) == 2
+
+
 def test_build_for_case_alpha_uses_pin_polarity():
     # The α pin is now a POCKET (#27 crash fix): chainA (binder) chain-level (res_idxA EMPTY),
     # chainB (target) the FIXED anchor token. The case-nominal params carry no explicit target

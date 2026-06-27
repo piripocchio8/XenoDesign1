@@ -131,8 +131,10 @@ def test_cli_coord_residues_parsed_into_params():
     cfg = resolve_config("cyclic", target_type="metal",
                          cli_overrides={"use_pepmlm": False})
     _apply_declarative_flags(cfg, a)
+    # Stored tuple widened to (pos, one_letter, three_letter, chirality, atom) — atom last
+    # for back-compat (omitted @atom defaults per element: His -> ND1).
     assert cfg.restraint.params["coord_residues"] == [
-        (6, "H", "HIS", "L"), (12, "H", "DHI", "D")]
+        (6, "H", "HIS", "L", "ND1"), (12, "H", "DHI", "D", "ND1")]
 
 
 def test_cli_flags_absent_leave_params_untouched():

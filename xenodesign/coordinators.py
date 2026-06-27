@@ -37,11 +37,44 @@ class CoordResidue:
                  for a D token (e.g. 'DHI'). None is never produced by the parser (always set),
                  but the field is Optional so callers can construct a bare residue if needed.
     chirality:   'L' (1-letter token) or 'D' (CCD token).
+    atom:        the liganding atom name (e.g. 'ND1', 'SG'), from an explicit ``@<atom>`` suffix
+                 or the per-element default (His->ND1, Cys->SG, Met->SD, Asp->OD1, Glu->OE1,
+                 Lys->NZ); None for any residue without a sensible default and no explicit atom.
     """
     pos: int
     one_letter: str
     three_letter: str | None
     chirality: str
+    atom: str | None = None
+
+
+# Default liganding atom per coordinating residue (keyed by L-parent 1-letter code).
+DEFAULT_LIGAND_ATOM = {
+    "H": "ND1",   # His
+    "C": "SG",    # Cys
+    "M": "SD",    # Met
+    "D": "OD1",   # Asp
+    "E": "OE1",   # Glu
+    "K": "NZ",    # Lys
+}
+
+
+def _split_atom_suffix(token: str) -> tuple[str, str | None]:
+    """Split an optional ``@<atom>`` suffix off a coordinator token.
+
+    Returns (token_without_atom, atom_or_None). The atom must be a non-empty run of atom-name
+    characters (letters/digits/'); raises ValueError on an empty or malformed atom.
+    """
+    t = token.strip()
+    if "@" not in t:
+        return t, None
+    base, _, atom = t.partition("@")
+    atom = atom.strip()
+    if not atom:
+        raise ValueError(f"coordinator token {token!r} has an empty @atom suffix")
+    if not all(ch.isalnum() or ch == "'" for ch in atom):
+        raise ValueError(f"coordinator token {token!r} has an invalid atom name {atom!r}")
+    return base.strip(), atom.upper()
 
 
 def _split_identity_position(token: str) -> tuple[str, int]:
@@ -75,25 +108,33 @@ def parse_coord_token(token: str) -> CoordResidue:
       * longer identity   -> a D-CCD code (validated against mirror.D_TO_L; the D->L->1-letter
         parent is recorded as one_letter).
 
+    An optional ``@<atom>`` suffix (e.g. ``H6@ND1``, ``DHI12@ND1``, ``C7@SG``) names the
+    liganding atom; when omitted it defaults per residue element (see DEFAULT_LIGAND_ATOM).
+
     Raises ValueError on an unknown 1-letter code, an unknown CCD code, or a malformed token.
     """
-    identity, pos = _split_identity_position(token)
+    base, atom = _split_atom_suffix(token)
+    identity, pos = _split_identity_position(base)
     ident = identity.upper()
     if len(ident) == 1:
         # L-residue, 1-letter code.
         if ident not in AA1_TO_AA3:
             raise ValueError(
                 f"unknown 1-letter residue code {identity!r} in coordinator token {token!r}")
-        return CoordResidue(pos=pos, one_letter=ident, three_letter=AA1_TO_AA3[ident],
-                            chirality="L")
-    # D-residue, CCD code (must be a known chai D partner).
-    if ident not in D_TO_L:
-        raise ValueError(
-            f"unknown D-CCD code {identity!r} in coordinator token {token!r}; "
-            f"known D codes: {sorted(D_TO_L)}")
-    l_three = D_TO_L[ident]
-    return CoordResidue(pos=pos, one_letter=AA3_TO_AA1[l_three], three_letter=ident,
-                        chirality="D")
+        one_letter = ident
+        three_letter, chirality = AA1_TO_AA3[ident], "L"
+    else:
+        # D-residue, CCD code (must be a known chai D partner).
+        if ident not in D_TO_L:
+            raise ValueError(
+                f"unknown D-CCD code {identity!r} in coordinator token {token!r}; "
+                f"known D codes: {sorted(D_TO_L)}")
+        l_three = D_TO_L[ident]
+        one_letter, three_letter, chirality = AA3_TO_AA1[l_three], ident, "D"
+    if atom is None:
+        atom = DEFAULT_LIGAND_ATOM.get(one_letter)
+    return CoordResidue(pos=pos, one_letter=one_letter, three_letter=three_letter,
+                        chirality=chirality, atom=atom)
 
 
 def parse_coord_residues(spec: str) -> List[CoordResidue]:

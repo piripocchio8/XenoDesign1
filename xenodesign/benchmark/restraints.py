@@ -176,33 +176,55 @@ def metal_coordination_rows(params: dict) -> list:
     metal side is always 'X' (UNK).
 
     Two coordinator sources (DECLARATIVE wins when present):
-      * ``coord_residues`` — a list of (1-based pos, one-letter identity) tuples from the
-        declarative ``--coord_residues`` flag. GENERALIZES beyond His/Zn: each coordinator
-        emits its REAL one-letter identity (His 'H', Cys 'C', Asp 'D', ...). The chai CONTACT
-        asserts the one-letter matches the structure token, so a correct identity is required.
+      * ``coord_residues`` — a list of (1-based pos, one-letter identity[, three_letter,
+        chirality, atom]) tuples from the declarative ``--coord_residues`` flag. GENERALIZES
+        beyond His/Zn: each coordinator emits its REAL one-letter identity (His 'H', Cys 'C',
+        Asp 'D', ...). The chai CONTACT asserts the one-letter matches the structure token, so a
+        correct identity is required.
       * ``his_resnums`` — the legacy His-only positions (each emitted with identity 'H'); used
         only when ``coord_residues`` is absent (the case default).
-    Returns one row per coordinator."""
+
+    ATOM-SPECIFIC coordination (#1b): when a coordinator carries a liganding atom (the 5th tuple
+    element, e.g. 'ND1'/'SG') AND ``metal_covalent_atoms`` is set (defaults True when ANY
+    coordinator has an atom), each such coordinator ALSO emits an atom-level COVALENT row binding
+    the coordinator atom to the metal atom (``metal_atom``, default 'ZN'). The residue-level
+    CONTACT row is ALWAYS kept (robust distance bias). With NO atoms, behavior is unchanged
+    (pure contact)."""
     metal_chain = params['metal_chain']
     metal_resnum = params['metal_resnum']
     coord_chain = params.get('his_chain') or params.get('coord_chain')
+    metal_atom = params.get('metal_atom', 'ZN')
     coords = params.get('coord_residues')
     if coords:
-        # DECLARATIVE path: (pos, one-letter identity) per coordinator; generic comment/id.
-        items = [(int(pos), str(one_letter), f'{one_letter}-metal', f'metal_coord_{int(pos)}')
-                 for pos, one_letter in coords]
+        # DECLARATIVE path: (pos, one-letter[, three_letter, chirality, atom]); generic id/comment.
+        # ``atom`` is the OPTIONAL 5th element (index 4); absent on legacy 2-tuples.
+        items = [(int(t[0]), str(t[1]),
+                  (t[4] if len(t) > 4 else None),
+                  f'{t[1]}-metal', f'metal_coord_{int(t[0])}')
+                 for t in coords]
     else:
         his_resnums = params.get('his_resnums')
         if not his_resnums:
             raise ValueError('metal_coordination_rows: no coord_residues or his_resnums provided')
-        # Legacy His-only path: identity 'H', original 'His-Zn'/'zn_coord_<pos>' comment/id.
-        items = [(int(hr), 'H', 'His-Zn', f'zn_coord_{int(hr)}') for hr in his_resnums]
-    return [contact_row(
-        chain_a=coord_chain, resnum_a=pos, chain_b=metal_chain, resnum_b=metal_resnum,
-        confidence=params['confidence'], max_distance=params['max_distance'],
-        res_one_letter_a=one_letter, res_one_letter_b=UNKNOWN_RES,
-        comment=comment, restraint_id=rid,
-    ) for pos, one_letter, comment, rid in items]
+        # Legacy His-only path: identity 'H', no atom, original 'His-Zn'/'zn_coord_<pos>'.
+        items = [(int(hr), 'H', None, 'His-Zn', f'zn_coord_{int(hr)}') for hr in his_resnums]
+    # Default the covalent-atom flag ON when any coordinator declared a liganding atom.
+    emit_covalent = params.get('metal_covalent_atoms', any(atom for _, _, atom, _, _ in items))
+    rows = []
+    for pos, one_letter, atom, comment, rid in items:
+        rows.append(contact_row(
+            chain_a=coord_chain, resnum_a=pos, chain_b=metal_chain, resnum_b=metal_resnum,
+            confidence=params['confidence'], max_distance=params['max_distance'],
+            res_one_letter_a=one_letter, res_one_letter_b=UNKNOWN_RES,
+            comment=comment, restraint_id=rid))
+        if emit_covalent and atom:
+            rows.append(covalent_bond_row(
+                chain_a=coord_chain, resnum_a=pos, atom_a=atom,
+                chain_b=metal_chain, resnum_b=metal_resnum, atom_b=metal_atom,
+                res_one_letter_a=one_letter, res_one_letter_b=UNKNOWN_RES,
+                confidence=params['confidence'],
+                comment=f'{comment}-covalent', restraint_id=f'{rid}_cov'))
+    return rows
 
 
 def covalent_bond_row(chain_a: str, resnum_a: int, atom_a: str,

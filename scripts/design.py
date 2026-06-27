@@ -140,9 +140,10 @@ def _apply_declarative_flags(cfg, a) -> None:
     if a.coord_residues is not None:
         from xenodesign.coordinators import parse_coord_residues
         coords = parse_coord_residues(a.coord_residues)
-        # Stored as plain tuples so the resolved-config dump is JSON-clean.
+        # Stored as plain tuples so the resolved-config dump is JSON-clean. The atom is the
+        # 5th element (last) for backward compatibility — older 4-tuple consumers index 0-3.
         cfg.restraint.params["coord_residues"] = [
-            (c.pos, c.one_letter, c.three_letter, c.chirality) for c in coords]
+            (c.pos, c.one_letter, c.three_letter, c.chirality, c.atom) for c in coords]
 
 
 def main(argv=None):
