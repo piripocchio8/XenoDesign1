@@ -108,6 +108,16 @@ def sequence_quality_key(seq: str) -> float:
         max_run = max(max_run, run)
     if max_run >= 4:
         penalty += 1.0
+    # S3a.6 (#4): de-gaming entropy penalty (flag-gated). Beyond the run-length rule, penalise a
+    # sequence whose normalized Shannon entropy is low (a repeating few-letter "diverse-looking" seq
+    # still games Chai). Flag OFF keeps the legacy key byte-identical for the default suite.
+    # Raising the oversample count (num_seqs) to further de-game is a cfg override (--loop.num_seqs),
+    # not a code change — see build_loop_fn in seq_stage.py for the de-gaming rationale.
+    import os
+    if os.environ.get("XENO_SEQ_STAGE", "0") != "0":
+        ent = sequence_complexity(s)
+        if ent < 0.5:                       # below half of the max 20-letter entropy -> graded penalty
+            penalty += (0.5 - ent)          # smooth, never a cliff; subtracted from the complexity below
     return sequence_complexity(s) - penalty
 
 
