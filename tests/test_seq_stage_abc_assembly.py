@@ -22,6 +22,30 @@ def _metal_cfg(tmp_path):
                        "restraint.params": {"coord_residues": _COORD}})
 
 
+def test_abc_metal_eval_predicts_under_coordination(tmp_path, monkeypatch):
+    """Pin the headline: flag-ON ABC-metal feeds a COORDINATION restraint to every eval (not the
+    closure-only legacy). Captured via a fitness that records its constraint file content."""
+    seen = {}
+
+    def _fake_make_fitness(backend, **k):
+        rows = k.get("coord_restraint_rows")
+        seen["coord_rows"] = rows
+        def fitness(sequence, chirality_pattern):
+            fitness.last_structure = None
+            return float(len(set(sequence)))
+        fitness.last_structure = None
+        return fitness
+
+    monkeypatch.setenv("XENO_SEQ_STAGE", "1")
+    _abc_fakes(monkeypatch)
+    # Override the fitness with our capturing version AFTER _abc_fakes so it wins.
+    monkeypatch.setattr("xenodesign.abc.fitness.make_abc_fitness", _fake_make_fitness)
+    monkeypatch.setattr("xenodesign.dispatch.make_abc_fitness", _fake_make_fitness, raising=False)
+    monkeypatch.setattr("xenodesign.targets._metal_patch_verified", lambda: True, raising=True)
+    dispatch.run_design(_metal_cfg(tmp_path))
+    assert seen["coord_rows"] is not None and any("H6@ND1" in r for r in seen["coord_rows"])
+
+
 def test_abc_flag_off_returns_bespoke_dict(tmp_path, monkeypatch):
     _abc_fakes(monkeypatch)
     monkeypatch.delenv("XENO_SEQ_STAGE", raising=False)

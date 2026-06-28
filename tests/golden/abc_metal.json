@@ -1,42 +1,20 @@
 {
-  "abc_variant": "a",
+  "backbone_rmsd_to_deposit": null,
+  "baseline_backbone_rmsd": 1.0,
   "case_id": "cyclic",
-  "fitness_steps": 15,
-  "history": [
-    {
-      "best_nectar": 10.0,
-      "cycle": 0,
-      "evals_used": 10
-    }
-  ],
-  "n_cycles": 1,
-  "search": "abc",
-  "selected_chirality_pattern": {
-    "0": "L",
-    "1": "D",
-    "10": "L",
-    "11": "D",
-    "12": "L",
-    "13": "D",
-    "14": "L",
-    "15": "D",
-    "16": "L",
-    "17": "D",
-    "18": "L",
-    "19": "D",
-    "2": "L",
-    "20": "L",
-    "21": "D",
-    "22": "L",
-    "23": "D",
-    "3": "D",
-    "4": "L",
-    "5": "D",
-    "6": "L",
-    "7": "D",
-    "8": "L",
-    "9": "D"
+  "closure": false,
+  "l_seed_iptm": 0.0,
+  "metal_geometry": {
+    "geometry": null,
+    "passed": true,
+    "perplexity": null
   },
+  "n_iters": 1,
+  "phase": "linear+emergent-closure (mainchain head-to-tail closure opt-in)",
+  "restraints": true,
   "selected_d_fasta": "DAHGGHDWNYFHANEGTHAWEWFH",
-  "selected_nectar": 10.0
+  "selected_iptm": 10.0,
+  "selected_ptm": 10.0,
+  "termini_distance_closure_proxy": null,
+  "zn_coordination_geometry": null
 }

@@ -26,6 +26,7 @@ _COORD = [
 
 
 def test_golden_metal_abc(tmp_path, monkeypatch):
+    monkeypatch.setenv("XENO_SEQ_STAGE", "1")   # S3a.5c: the coordinated+gated+panel ABC-metal is the contract
     _abc_fakes(monkeypatch)
     cfg = resolve_config(
         "cyclic", target_type="metal", out_dir=str(tmp_path),
